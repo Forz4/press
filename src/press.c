@@ -1005,7 +1005,7 @@ char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
     } else {
         offset += sprintf(ret+offset , "no conn process running\n");
     }
-    if ( p_pack_conf->status != NOTLOADED ){
+    if ( p_pack_conf->status == LOADED || p_pack_conf->status == RUNNING ){
         offset += sprintf(ret+offset , \
                 "===============================packing status=============================================\n");
         offset += sprintf(ret+offset , \
