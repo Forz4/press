@@ -87,6 +87,13 @@ typedef struct mystat{
     int     timetotal;      /* time in total */
 }stat_st;
 
+typedef struct monstat{
+    int     send_num;       /* number of packages sent by conn*/
+    int     recv_num;       /* number of packages received by conn*/
+    int     real_send_tps;  /* real send tps */
+    int     real_recv_tps;  /* real recv tps */
+}monstat_st;
+
 int conn_config_load(conn_config_st *);
 void conn_config_free(conn_config_st *);
 int conn_start(conn_config_st *);

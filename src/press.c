@@ -7,8 +7,15 @@ char    ENCODING;               /*A:ascii H:hex*/
 int     sock_send = 0;			/*socket for sender*/
 int     sock_recv = 0;			/*socket for receiver*/
 int     g_shmid = 0;
+int     g_mon_shmid = 0;
 int     presscmd_pid = 0;      /* indicate which presscmd is sending msg */
-stat_st *g_stat;
+stat_st *g_stat;               /* global pointer for stat area share memory*/
+monstat_st *g_mon_stat;        /* global pointer for monitor area share memory */
+
+/* for calculating real tps */
+int     lastTimeSendNum;
+int     lastTimeRecvNum;
+struct  timeval lastTimeStamp;
 
 int conn_config_load(conn_config_st *p_conn_conf)
 {
@@ -223,6 +230,12 @@ int conn_receiver_start(comm_proc_st *p_receiver)
 		exit(1);
 	}
 
+    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
+    if ( g_mon_stat == NULL ){
+		log_write(SYSLOG , LOGERR , "shmat fail");
+		return -1;
+    }
+
 	log_write(SYSLOG , LOGINF , "RECEIVER connectted");
 	while(1){
 		memset(buffer , 0x00 , sizeof(buffer));
@@ -246,6 +259,8 @@ int conn_receiver_start(comm_proc_st *p_receiver)
 				nLeft -= nRead;
 			}
 		}
+        
+        g_mon_stat->recv_num ++;
 
         if ( p_receiver->persist == 1 ){
 		    msgs.type = 1;
@@ -295,6 +310,13 @@ int conn_sender_start(comm_proc_st *p_sender)
 	servaddr.sin_port = htons(p_sender->port);
 	servaddr.sin_addr.s_addr = inet_addr(p_sender->ip);
 
+    /* relocate share memory */
+    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
+    if ( g_mon_stat == NULL ){
+		log_write(SYSLOG , LOGERR , "shmat fail");
+		return -1;
+    }
+
 	while (1){
 		if (connect(sock_send , (struct sockaddr*)&servaddr , sizeof(servaddr)) < 0){
 			close(sock_send);
@@ -341,6 +363,7 @@ int conn_sender_start(comm_proc_st *p_sender)
 			nLeft -= nSent;
 		}
 
+        g_mon_stat->send_num ++;
 
         if ( p_sender->persist == 1 ){
             gettimeofday(&ts , NULL);
@@ -578,6 +601,12 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
 		cur = cur->next;
 	}
     p_pack_conf->status = LOADED;
+
+    memset(g_mon_stat , 0x0 , sizeof(monstat_st));
+    lastTimeSendNum = 0;
+    lastTimeRecvNum = 0;
+    memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
+
 	log_write(SYSLOG , LOGINF , "pitcher config loaded " );
     return 0;
 }
@@ -621,6 +650,10 @@ int pack_shut(pack_config_st *p_pack_conf)
     }
 
     p_pack_conf->status = FINISHED;
+    memset(g_mon_stat , 0x0 , sizeof(monstat_st));
+    lastTimeSendNum = 0;
+    lastTimeRecvNum = 0;
+    memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
 
 	return 0;
 }
@@ -977,6 +1010,8 @@ char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
     char *ret = (char *)malloc(MAX_MSG_LEN);
     int offset = 0;
     char status[20];
+    struct  timeval nowTimeStamp;
+    struct  timeval timeInterval;
     memset(ret , 0x00 , MAX_MSG_LEN);
     comm_proc_st *p_comm = p_conn_conf->process_head;
     pit_proc_st  *p_pack = p_pack_conf->pit_head;
@@ -1036,6 +1071,31 @@ char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
         }
         offset += sprintf(ret+offset , \
                 "===============================packing status=============================================\n");
+        offset += sprintf(ret+offset , \
+                "===============================monitor status=============================================\n");
+        offset += sprintf(ret+offset , \
+                "real send :    %d\n" , g_mon_stat->send_num);
+        offset += sprintf(ret+offset , \
+                "real recv :    %d\n" , g_mon_stat->recv_num);
+
+		gettimeofday(&nowTimeStamp,NULL);
+        timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
+        memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
+        if ( lastTimeSendNum > 0 ){
+            g_mon_stat->real_send_tps = (g_mon_stat->send_num - lastTimeSendNum) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
+        }
+        lastTimeSendNum = g_mon_stat->send_num;
+        if ( lastTimeRecvNum > 0 ){
+            g_mon_stat->real_recv_tps = (g_mon_stat->recv_num - lastTimeRecvNum ) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
+        }
+        lastTimeRecvNum = g_mon_stat->recv_num;
+        offset += sprintf(ret+offset , \
+                "real send tps :%d\n" , g_mon_stat->real_send_tps);
+        offset += sprintf(ret+offset , \
+                "real recv tps :%d\n" , g_mon_stat->real_recv_tps);
+        offset += sprintf(ret+offset , \
+                "===============================monitor status=============================================\n");
+        
     } else {
         offset += sprintf(ret+offset , "no packing process running");
     }
@@ -1247,7 +1307,7 @@ int main(int argc , char *argv[])
     p_pack_conf->status = NOTLOADED;
 
     /* create share memory */
-    g_shmid = shmget( (key_t)18000 , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
+    g_shmid = shmget( IPC_PRIVATE , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
     if ( g_shmid < 0 ){
 		log_write(SYSLOG , LOGERR , "create share memory fail");
 		return -1;
@@ -1259,6 +1319,17 @@ int main(int argc , char *argv[])
 		return -1;
     }
 	log_write(SYSLOG , LOGINF , "shmat OK , g_stat = %u" , g_stat);
+
+    g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
+    if ( g_mon_shmid < 0 ){
+		log_write(SYSLOG , LOGERR , "create share memory fail");
+		return -1;
+    }
+    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
+    if ( g_mon_stat == NULL ){
+		log_write(SYSLOG , LOGERR , "shmat fail");
+		return -1;
+    }
 
 	/*wait for command*/
 	while (1){
@@ -1350,6 +1421,8 @@ int main(int argc , char *argv[])
 	msgctl((key_t)p_conn_conf->qid_out , IPC_RMID , NULL);
     shmdt((void *)g_stat);
     shmctl(g_shmid , IPC_RMID , 0);
+    shmdt((void *)g_mon_stat);
+    shmctl(g_mon_shmid , IPC_RMID , 0);
     remove("/tmp/press.pid");
 	return 0;
 }

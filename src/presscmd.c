@@ -119,8 +119,8 @@ int main(int argc , char *argv[])
 
         /* activate monitor mode */
         if ( memcmp( inputLine ,  "moni" , 4) == 0 ){
-            system("clear");
             strcpy(inputLine , "stat");
+            system("clear");
             monitor_mode = 1;
             outflag = 0;
         }
