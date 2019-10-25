@@ -49,6 +49,7 @@ typedef struct pit_proc{
 typedef struct cat_proc{
 	pid_t 	pid;
 	int 	qid;
+    struct  cat_proc *next;
 }cat_proc_st;
 
 typedef struct pack_config{

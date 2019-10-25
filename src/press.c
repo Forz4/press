@@ -4,6 +4,7 @@ sigjmp_buf jmpbuf;
 int     QID_CMD = 0;			/*qid for command*/
 int     HEART_INTERVAL;			/*heart beat interval*/
 char    ENCODING;               /*A:ascii H:hex*/
+int     CATCHER_NUM=0;
 int     sock_send = 0;			/*socket for sender*/
 int     sock_recv = 0;			/*socket for receiver*/
 int     g_shmid = 0;
@@ -419,6 +420,8 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 	char 	buf[100];
 	int 	count = 0;
 	char 	pathname[MAX_PATHNAME_LEN];
+    cat_proc_st *cat_cur = NULL;
+    char    value[MAX_CFG_VAL_LEN];
 
 	log_write(SYSLOG , LOGDBG , "loading pack configs");
 	p_pack_conf->pit_head = NULL;
@@ -442,13 +445,27 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 		return -1;
 	}
 
-	p_pack_conf->cat_head = (cat_proc_st *)malloc(sizeof(cat_proc_st));
-	if ( p_pack_conf->cat_head == NULL ){
-		log_write(SYSLOG , LOGERR , "malloc fails");
-		return -1;
-	}
+	if (loadConfig("CATCHER_NUM" , value , MAX_CFG_VAL_LEN) < 0)
+		CATCHER_NUM = 1;
+    else
+        CATCHER_NUM = atoi(value);
 
-	p_pack_conf->cat_head->qid = p_pack_conf->qid_in;
+    p_pack_conf->cat_head = NULL;
+    for ( int i = 0 ; i < CATCHER_NUM ; i ++ ){
+	    cat_cur= (cat_proc_st *)malloc(sizeof(cat_proc_st));
+        if(cat_cur == NULL){
+		    log_write(SYSLOG , LOGERR , "malloc fails");
+		    return -1;
+        }
+        cat_cur->qid = p_pack_conf->qid_in;
+        if ( p_pack_conf->cat_head != NULL ){
+            cat_cur->next = p_pack_conf->cat_head->next;
+            p_pack_conf->cat_head->next = cat_cur;
+        } else {
+            p_pack_conf->cat_head = cat_cur;
+            cat_cur->next = NULL;
+        }
+    }
 
 	/* load pitcher processes */
 	memset(pathname , 0x00 , sizeof(pathname));
@@ -554,6 +571,8 @@ int pack_config_free(pack_config_st *p_pack_conf)
 	pack_config_st *cur = p_pack_conf;
 	pit_proc_st *pit_cur = NULL;
 	pit_proc_st *pit_del = NULL;
+	cat_proc_st *cat_cur = NULL;
+	cat_proc_st *cat_del = NULL;
 	if ( cur == NULL )
 	{
 		return 0;
@@ -567,7 +586,12 @@ int pack_config_free(pack_config_st *p_pack_conf)
 		fclose(pit_del->rule_fp);
 		free(pit_del);
 	}
-	free(cur->cat_head);
+    cat_cur = cur->cat_head;
+	while ( cat_cur != NULL ){
+		cat_del = cat_cur;
+		cat_cur = cat_cur->next;
+		free(cat_del);
+	}
 
 	log_write(SYSLOG , LOGDBG ,  "clearing configs end");
 	return 0;
@@ -614,9 +638,13 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
 int pack_send(pack_config_st *p_pack_conf)
 {
 	pit_proc_st *cur = p_pack_conf->pit_head;
+    cat_proc_st *cat_cur = p_pack_conf->cat_head;
 	/* start catcher */
-	p_pack_conf->cat_head->pid = pack_cat_start(p_pack_conf->cat_head);
-	log_write(SYSLOG , LOGINF , "catcher start , PID[%d]",p_pack_conf->cat_head->pid);
+    while (cat_cur != NULL){
+        cat_cur->pid  = pack_cat_start(cat_cur);
+	    log_write(SYSLOG , LOGINF , "catcher start , PID[%d]",cat_cur->pid);
+        cat_cur = cat_cur->next;
+    }
 	/* start pitchers */
 	while ( cur != NULL ) {
 		cur->pid = pack_pit_start(cur);
@@ -644,9 +672,12 @@ int pack_shut(pack_config_st *p_pack_conf)
 		pit_cur = pit_cur->next;
 	}
 
-    if( cat_cur->pid){
-	    kill(cat_cur->pid , SIGTERM);
-	    log_write(SYSLOG , LOGINF , "killing catcher pid[%d]" , cat_cur->pid);
+    while ( cat_cur != NULL ){
+        if( cat_cur->pid){
+	        kill(cat_cur->pid , SIGTERM);
+	        log_write(SYSLOG , LOGINF , "killing catcher pid[%d]" , cat_cur->pid);
+        }
+        cat_cur = cat_cur->next;
     }
 
     p_pack_conf->status = FINISHED;
@@ -788,7 +819,7 @@ int pack_cat_start(cat_proc_st *p_catcher)
 	char pathname[MAX_PATHNAME_LEN];
 
 	memset(pathname , 0x00 , sizeof(pathname));
-	sprintf(pathname , "%s/data/result.txt" , getenv("PRESS_HOME"));
+	sprintf(pathname , "%s/data/result%d.txt" , getenv("PRESS_HOME") , getpid());
 	fp = fopen(pathname , "w+");
 	if (fp == NULL){
 		log_write(SYSLOG , LOGERR , "can not open result.txt");
@@ -1074,9 +1105,9 @@ char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
         offset += sprintf(ret+offset , \
                 "===============================monitor status=============================================\n");
         offset += sprintf(ret+offset , \
-                "real send :    %d\n" , g_mon_stat->send_num);
+                "real send number:    %d\n" , g_mon_stat->send_num);
         offset += sprintf(ret+offset , \
-                "real recv :    %d\n" , g_mon_stat->recv_num);
+                "real recv number:    %d\n" , g_mon_stat->recv_num);
 
 		gettimeofday(&nowTimeStamp,NULL);
         timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
@@ -1090,9 +1121,9 @@ char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
         }
         lastTimeRecvNum = g_mon_stat->recv_num;
         offset += sprintf(ret+offset , \
-                "real send tps :%d\n" , g_mon_stat->real_send_tps);
+                "real send tps :      %d\n" , g_mon_stat->real_send_tps);
         offset += sprintf(ret+offset , \
-                "real recv tps :%d\n" , g_mon_stat->real_recv_tps);
+                "real recv tps :      %d\n" , g_mon_stat->real_recv_tps);
         offset += sprintf(ret+offset , \
                 "===============================monitor status=============================================\n");
         
