@@ -13,7 +13,6 @@ int         g_shmid = 0;        /* 共享内存全局状态区ID */
 int         g_mon_shmid = 0;    /* 共享内存实时监控区ID */
 stat_st    *g_stat;             /* 全局状态区指针 */
 monstat_st *g_mon_stat;         /* 实时状态区指针*/
-int         g_semid = 0;        /* 全局信号量用于保护g_shmid*/
 int         g_mon_semid = 0;    /* 全局信号量用于保护g_mon_shmid*/
 int         presscmd_pid = 0;   /* presscmd控制台进程ID  */
 
@@ -1345,92 +1344,118 @@ void reply(char *rep)
     return;
 }
 
-char *get_stat(conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
+char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
 {
     char *ret = (char *)malloc(MAX_MSG_LEN);
     int offset = 0;
     char status[20];
+    char type[20];
     struct  timeval nowTimeStamp;
     struct  timeval timeInterval;
     memset(ret , 0x00 , MAX_MSG_LEN);
     comm_proc_st *p_comm = p_conn_conf->process_head;
     pit_proc_st  *p_pack = p_pack_conf->pit_head;
     stat_st *l_stat;
-    if ( p_conn_conf->status == RUNNING ){
-        offset += sprintf(ret+offset , \
-                "==========COMM STATUS================\n");
-        offset += sprintf(ret+offset , \
-                "[T][IP             ][PORT  ][STATUS ]\n");
-        while ( p_comm != NULL ){
-            memset( status , 0x00 , sizeof(status));
-            if ( kill( p_comm->pid , 0 ) == 0 ){
-                strcpy(status , "RUNNING");
-            } else {
-                strcpy(status , "DEAD");
-            }
-            offset += sprintf(ret+offset , 
-                            "[%c][%-15s][%-6d][%-7s]\n" , \
-                            p_comm->type , \
-                            p_comm->ip , \
-                            p_comm->port ,\
-                            status);
-            p_comm = p_comm->next;
-        }
-    } else {
-        offset += sprintf(ret+offset , "无通讯模块进程信息,输入init启动通讯模块\n");
-    }
-    if ( p_pack_conf->status == LOADED || p_pack_conf->status == RUNNING ){
-        offset += sprintf(ret+offset , \
-                "=====================PACKING SETUP================================\n");
-        offset += sprintf(ret+offset , \
-                "[INDEX][TPLFILENAME][STATUS    ][SETTPS][PACKSENT ][TIME         ]\n");
-        while ( p_pack != NULL ) {
-            l_stat = g_stat + p_pack->index;
-            memset( status , 0x00 , sizeof(status));
-            if ( l_stat->tag != NOTLOADED ){
-                if ( l_stat->tag == RUNNING ){
-                    strcpy(status , "RUNNING");
-                } else if ( l_stat->tag == LOADED ){
-                    strcpy(status , "LOADED");
-                } else if ( l_stat->tag == FINISHED ){
-                    strcpy(status , "FINISHED");
+    if ( (flag & STAT_CONN) ){
+        if ( p_conn_conf->status == RUNNING ){
+            offset += sprintf(ret+offset , \
+                    "通讯进程状态\n");
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
+            offset += sprintf(ret+offset , \
+                    "[类型][IP             ][端口  ][状态  ]\n");
+            while ( p_comm != NULL ){
+                memset( status , 0x00 , sizeof(status));
+                memset( type , 0x00 , sizeof(type));
+                if ( kill( p_comm->pid , 0 ) == 0 ){
+                    strcpy(status , "运行中");
+                } else {
+                    strcpy(status , "已退出");
                 }
-                offset += sprintf(ret+offset , \
-                                "[%-5d][%-11s][%-10s][%-6d][%-9d][%-6d/%-6d]\n" , \
-                                p_pack->index,\
-                                p_pack->tplFileName,\
-                                status,\
-                                l_stat->tps,\
-                                l_stat->send_num,\
-                                l_stat->timelast,\
-                                l_stat->timetotal);
+                if ( p_comm->type == 'S' ){
+                    strcpy(type , "发送");
+                } else if ( p_comm->type == 'R' ){
+                    strcpy(type , "接收");
+                } else if ( p_comm->type == 'J' ){
+                    strcpy(type , "外卡");
+                }
+
+                offset += sprintf(ret+offset , 
+                                "[%-4s][%-15s][%-6d][%-7s]\n" , \
+                                type , \
+                                p_comm->ip , \
+                                p_comm->port ,\
+                                status);
+                p_comm = p_comm->next;
             }
-            p_pack = p_pack->next;
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n\n");
+        } else {
+            offset += sprintf(ret+offset , "无通讯模块进程信息,输入init启动通讯模块\n");
         }
-        offset += sprintf(ret+offset , \
-                "============REAL TIME STATICS===========\n");
-        offset += sprintf(ret+offset , \
-                "[PACKSENT ][PACKRECV ][SENDTPS][RECVTPS]\n");
-		gettimeofday(&nowTimeStamp,NULL);
-        timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
-        memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
-        if ( lastTimeSendNum > 0 ){
-            g_mon_stat->real_send_tps = (g_mon_stat->send_num - lastTimeSendNum) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
+    }
+    if ( (flag & STAT_PACK) ){
+        if ( p_pack_conf->status == LOADED || p_pack_conf->status == RUNNING ) {
+            offset += sprintf(ret+offset , \
+                    "组包进程状态\n");
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
+            offset += sprintf(ret+offset , \
+                    "[序号 ][模板文件   ][状态      ][设置速度][已发送报文数][已发送时间/总时间]\n");
+            while ( p_pack != NULL ) {
+                l_stat = g_stat + p_pack->index;
+                memset( status , 0x00 , sizeof(status));
+                if ( l_stat->tag != NOTLOADED ){
+                    if ( l_stat->tag == RUNNING ){
+                        strcpy(status , "运行中");
+                    } else if ( l_stat->tag == LOADED ){
+                        strcpy(status , "配置已加载");
+                    } else if ( l_stat->tag == FINISHED ){
+                        strcpy(status , "发送完毕");
+                    }
+                    offset += sprintf(ret+offset , \
+                                    "[%-5d][%-11s][%-10s][%-8d][%-12d][%-8d/%-8d]\n" , \
+                                    p_pack->index,\
+                                    p_pack->tplFileName,\
+                                    status,\
+                                    l_stat->tps,\
+                                    l_stat->send_num,\
+                                    l_stat->timelast,\
+                                    l_stat->timetotal);
+                }
+                p_pack = p_pack->next;
+            }
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n\n");
+            offset += sprintf(ret+offset , \
+                    "实时监控数据\n");
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
+            offset += sprintf(ret+offset , \
+                    "[发送总笔数][接收总笔数][发送速度][接收速度]\n");
+	    	gettimeofday(&nowTimeStamp,NULL);
+            timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
+            memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
+            if ( lastTimeSendNum > 0 ){
+                g_mon_stat->real_send_tps = (g_mon_stat->send_num - lastTimeSendNum) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
+            }
+            lastTimeSendNum = g_mon_stat->send_num;
+            if ( lastTimeRecvNum > 0 ){
+                g_mon_stat->real_recv_tps = (g_mon_stat->recv_num - lastTimeRecvNum ) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
+            }
+            lastTimeRecvNum = g_mon_stat->recv_num;
+            offset += sprintf(ret+offset , \
+                    "[%-10d][%-10d][%-8d][%-8d]\n", \
+                    g_mon_stat->send_num,\
+                    g_mon_stat->recv_num,\
+                    g_mon_stat->real_send_tps,\
+                    g_mon_stat->real_recv_tps);
+
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n\n");
+        } else {
+            offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置");
         }
-        lastTimeSendNum = g_mon_stat->send_num;
-        if ( lastTimeRecvNum > 0 ){
-            g_mon_stat->real_recv_tps = (g_mon_stat->recv_num - lastTimeRecvNum ) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
-        }
-        lastTimeRecvNum = g_mon_stat->recv_num;
-        offset += sprintf(ret+offset , \
-                "[%-9d][%-9d][%-7d][%-7d]\n", \
-                g_mon_stat->send_num,\
-                g_mon_stat->recv_num,\
-                g_mon_stat->real_send_tps,\
-                g_mon_stat->real_recv_tps);
-        
-    } else {
-        offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置");
     }
 
     return ret;
@@ -1474,13 +1499,13 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     for ( ; i < strlen(msg) ; i ++){
         if ( msg[i] == ' ' || msg[i] == '%' ){
             if ( adjustment == 0 && direc != 0 ){
-                offset += sprintf(ret+offset , "ERROR: invalid adjustment1.[%s]",msg);
+                offset += sprintf(ret+offset , "[%s]命令格式错误,缺少数字",msg);
                 return ret;
             }
             break;
         }
         if ( msg[i] < '0' || msg[i] > '9' ){
-            offset += sprintf(ret+offset , "ERROR: invalid adjustment2.[%s]",msg);
+            offset += sprintf(ret+offset , "[%s]命令格式错误,监测到非数字",msg);
             return ret;
         }
         adjustment*=10;
@@ -1488,7 +1513,7 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     }
     if ( msg[i] == '%' ){
         if ( direc == 0 ){
-            offset += sprintf(ret+offset , "ERROR: invalid adjustment3.[%s]",msg);
+            offset += sprintf(ret+offset , "[%s]命令格式错误,shiyong%%未指定+-",msg);
             return ret;
         } else {
             percent = 1;
@@ -1516,16 +1541,16 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     if ( id >= 0 ){
         status_op(flag , id , adjustment , percent , direc , &before , &after);
         if ( flag == 1 )
-            offset += sprintf(ret+offset , "Modified tps for INDEX[%d] , [%d]--->[%d]" , id , before , after);
+            offset += sprintf(ret+offset , "序号[%d]组包进程TPS调整成功,调整前[%d],调整后[%d]" , id , before , after);
         else
-            offset += sprintf(ret+offset , "Modified totaltime for INDEX[%d] , [%d]--->[%d]" , id , before , after);
+            offset += sprintf(ret+offset , "序号[%d]组包进程发送时间调整成功,调整前[%d],调整后[%d]" , id , before , after);
     } else {
         while ( p_pack != NULL ){
             status_op(flag , p_pack->index , adjustment , percent , direc , &before , &after);
             if ( flag == 1 )
-                offset += sprintf(ret+offset , "Modified tps for INDEX[%d] , [%d]--->[%d]\n" , p_pack->index , before , after);
+                offset += sprintf(ret+offset , "序号[%d]组包进程TPS调整成功,调整前[%d],调整后[%d]\n" , p_pack->index , before , after);
             else
-                offset += sprintf(ret+offset , "Modified totaltime INDEX[%d] , [%d]--->[%d]\n" , p_pack->index , before , after);
+                offset += sprintf(ret+offset , "序号[%d]组包进程发送时间调整成功,调整前[%d],调整后[%d]\n" , p_pack->index , before , after);
             p_pack = p_pack->next;
         }
     }
@@ -1597,7 +1622,7 @@ int main(int argc , char *argv[])
 
     /* 检查是否已存在运行的实例 */
     if ( check_deamon() ){
-        log_write(SYSLOG , LOGERR , "守护进程已经在运行");
+        log_write(SYSLOG , LOGERR , "守护进程已经在运行,不可重复启动");
         exit(1);
     }
 
@@ -1610,7 +1635,8 @@ int main(int argc , char *argv[])
         fclose(fp);
     }
 
-	log_write(SYSLOG , LOGINF , "守护进程启动，环境变量${PRESS_HOME}=%s" , getenv("PRESS_HOME"));
+	log_write(SYSLOG , LOGINF , "守护进程启动成功");
+	log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME}=%s" , getenv("PRESS_HOME"));
 
 	/* 信号处理 */
 	signal(SIGCHLD , SIG_IGN);
@@ -1622,38 +1648,31 @@ int main(int argc , char *argv[])
     int ret = 0;
 
     /* 初始化信号量 */
-    g_semid = sem_init();
-    if ( g_semid < 0 ){
-		log_write(SYSLOG , LOGERR , "守护进程初始化信号量失败");
-        goto error_out;
-    }
-	log_write(SYSLOG , LOGINF , "守护进程初始化信号量成功,semid=%d",g_semid);
-
     g_mon_semid = sem_init();
-    if ( g_semid < 0 ){
-		log_write(SYSLOG , LOGERR , "守护进程初始化信号量失败");
+    if ( g_mon_semid < 0 ){
+		log_write(SYSLOG , LOGERR , "初始化信号量失败");
         goto error_out;
     }
-	log_write(SYSLOG , LOGINF , "守护进程初始化信号量成功,semid=%d",g_mon_semid);
+	log_write(SYSLOG , LOGINF , "初始化信号量成功,g_mon_semid=%d",g_mon_semid);
 
 	/* 初始化命令消息队列 */
 	if ( (QID_CMD = get_qid("MSGKEY_CMD")) < 0){
-		log_write(SYSLOG , LOGERR , "无法从press.cfg中读取配置[MSGKEY_CMD]");
+		log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_CMD]");
         goto error_out;
 	}
-	log_write(SYSLOG , LOGINF , "守护进程初始化命令消息队列成功,msgid=%d" , QID_CMD);
+	log_write(SYSLOG , LOGINF , "初始化命令消息队列成功,QID_CMD=%d" , QID_CMD);
 
     /* 初始化全局结构体 */
 	p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
 	if ( p_conn_conf == NULL ){
-		log_write(SYSLOG , LOGERR , "守护进程调用malloc conn_config_st失败");
+		log_write(SYSLOG , LOGERR , "内部错误:malloc conn_config_st失败");
         goto error_out;
 	}
     p_conn_conf->status = NOTLOADED;
 
 	p_pack_conf = (pack_config_st *)malloc(sizeof(pack_config_st));
 	if ( p_pack_conf == NULL ){
-		log_write(SYSLOG , LOGERR , "守护进程调用malloc pack_config_st失败");
+		log_write(SYSLOG , LOGERR , "内部错误:调用malloc pack_config_st失败");
         goto error_out;
 	}
     p_pack_conf->status = NOTLOADED;
@@ -1661,68 +1680,66 @@ int main(int argc , char *argv[])
     /* 初始化共享内存 */
     g_shmid = shmget( IPC_PRIVATE , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
     if ( g_shmid < 0 ){
-		log_write(SYSLOG , LOGERR , "守护进程调用shmget失败");
+		log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
         goto error_out;
     }
     g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
     if ( g_stat == NULL ){
-		log_write(SYSLOG , LOGERR , "守护进程调用shmat失败,shmid = %d",g_shmid);
+		log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_shmid);
         goto error_out;
     }
-	log_write(SYSLOG , LOGINF , "守护进程创建全局状态内存区成功 , shmid = %d" , g_shmid);
+	log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid);
 
     g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
     if ( g_mon_shmid < 0 ){
-		log_write(SYSLOG , LOGERR , "守护进程调用shmget失败");
+		log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
         goto error_out;
     }
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
-		log_write(SYSLOG , LOGERR , "守护进程调用shmat失败,shmid = %d",g_mon_shmid);
+		log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_mon_shmid);
         goto error_out;
     }
-	log_write(SYSLOG , LOGINF , "守护进程创建监控状态内存区成功 , shmid = %d" , g_mon_shmid);
+	log_write(SYSLOG , LOGINF , "初始化监控状态内存区成功,g_mon_shmid = %d" , g_mon_shmid);
 
 	/* 循环处理命令 */
 	while (1){
-		log_write(SYSLOG , LOGINF , "守护进程开始等待命令...");
+		log_write(SYSLOG , LOGDBG , "等待命令输入...");
 
 		memset(&msgs , 0x00 , sizeof(msgs));
 		ret = msgrcv((key_t)(QID_CMD) , &msgs , sizeof(msgs) - sizeof(long) , getpid() , 0);
         if ( ret < 0 ){
-		    log_write(SYSLOG , LOGERR , "守护进程读取命令失败,ret[%d]" ,ret);
-            break;
+		    log_write(SYSLOG , LOGERR , "内部错误:守护进程从命令队列读取命令失败,ret[%d],msgid=%d",ret,QID_CMD);
+            goto error_out;
         }
-		log_write(SYSLOG , LOGINF ,"守护进程从presscmd客户端[pid=%d]收到命令[%s]" , msgs.pid , msgs.text);
+		log_write(SYSLOG , LOGDBG ,"从presscmd客户端[pid=%d]收到命令[%s]" , msgs.pid , msgs.text);
         presscmd_pid = msgs.pid;
 
 		if ( strncmp(msgs.text , "init" , 4) == 0 ){
 			if (p_conn_conf->status == RUNNING){
-				log_write(SYSLOG , LOGERR ,"[init]执行失败,通讯模块不可重复启动");
-                reply("[init]执行失败,通讯模块不可重复启动\n重启请先输入[stop]停止当前通讯模块");
+				log_write(SYSLOG , LOGINF ,"[init]执行失败,通讯模块不可重复启动");
+                reply("[init]执行失败,通讯模块不可重复启动");
 				continue;
 			}
 			conn_start(p_conn_conf);
-			log_write(SYSLOG , LOGINF ,"[init]执行成功,通讯模块已启动");
-            reply("[init]执行成功,通讯模块已启动");
+            reply("[init]执行成功,输入[stat]查看状态");
 		} else if ( strncmp(msgs.text , "stop" , 4) == 0 ){
 			if (p_conn_conf->status != RUNNING){
 				log_write(SYSLOG , LOGINF ,"[stop]执行失败,通讯模块未启动");
-                reply("[stop]执行失败,通讯模块未启动\n请先输入[init]启动通讯模块");
+                reply("[stop]执行失败,输入[init]启动通讯模块");
 				continue;
 			}
 			conn_stop(p_conn_conf);
-			log_write(SYSLOG , LOGINF ,"[stop]执行成功,通讯模块已停止");
-            reply("[stop]执行成功,通讯模块已停止");
+            reply("[stop]执行成功,通讯进程已停止");
 		} else if ( strncmp(msgs.text , "send" , 4) == 0 ) {
             if ( p_conn_conf->status != RUNNING ) {
 				log_write(SYSLOG , LOGINF ,"[send]执行失败,通讯模块未启动");
-                reply("[send]执行失败,通讯模块未启动\n请先输入[init]启动通讯模块");
+                reply("[send]执行失败,输入[init]启动通讯模块");
 				continue;
             }
             if ( p_pack_conf->status != LOADED ){
 				log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
-                reply("[send]执行失败,组包进程配置未加载\n请先输入[load]加载组包进程配置");
+                reply("[send]执行失败,输入[load]加载组包进程配置");
 				continue;
             }
 			pack_send(p_pack_conf);
@@ -1733,17 +1750,27 @@ int main(int argc , char *argv[])
 			log_write(SYSLOG , LOGINF ,"[shut]执行成功");
             reply("[shut]执行成功,组包进程已停止");
 		} else if ( strncmp(msgs.text , "kill" , 4) == 0 ){
+            reply("[kill]执行成功,守护进程正在退出");
+			pack_shut(p_pack_conf);
+			conn_stop(p_conn_conf);
+            break;
+            /*
 			if (p_conn_conf->status != RUNNING){
 				log_write(SYSLOG , LOGINF ,"[kill]执行成功,守护进程准备退出");
                 reply("[kill]执行成功,守护进程正在退出");
 				break;
 			}
 			else {
-				log_write(SYSLOG , LOGERR ,"[kill]执行失败,通讯模块仍在运行");
-                reply("[kill]执行失败,通讯模块仍在运行\n请先输入[stop]停止通讯模块");
+				log_write(SYSLOG , LOGINF ,"[kill]执行失败,通讯模块仍在运行");
+                reply("[kill]执行失败,输入[stop]停止通讯模块");
 			}
+            */
 		} else if ( strncmp(msgs.text , "stat" , 4) == 0){
-            retmsg = get_stat(p_conn_conf , p_pack_conf);
+            retmsg = get_stat( STAT_CONN|STAT_PACK , p_conn_conf , p_pack_conf);
+            reply(retmsg);
+            free(retmsg);
+		} else if ( strncmp(msgs.text , "moni" , 4) == 0){
+            retmsg = get_stat( STAT_PACK , p_conn_conf , p_pack_conf);
             reply(retmsg);
             free(retmsg);
         } else if ( strncmp(msgs.text , "load" , 4) == 0){
@@ -1758,8 +1785,8 @@ int main(int argc , char *argv[])
             }
         } else if ( strncmp( msgs.text , "tps" , 3) == 0){
             if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
-				log_write(SYSLOG , LOGERR ,"[tps]执行失败,组包进程配置未加载");
-                reply("[tps]执行失败,组包进程配置未加载\n请先输入[load]加载组包进程配置");
+				log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
+                reply("[tps]执行失败,输入[load]加载组包进程配置");
                 continue;
             }
             retmsg = adjust_status( 1 , msgs.text , p_pack_conf);
@@ -1767,8 +1794,8 @@ int main(int argc , char *argv[])
             free(retmsg);
         } else if ( strncmp( msgs.text , "time" , 4) == 0 ){
             if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
-				log_write(SYSLOG , LOGERR ,"[tps]执行失败,组包进程配置未加载");
-                reply("[tps]执行失败,组包进程配置未加载\n请先输入[load]加载组包进程配置");
+				log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
+                reply("[tps]执行失败,输入[load]加载组包进程配置");
                 continue;
             }
             retmsg = adjust_status( 2 , msgs.text , p_pack_conf);
@@ -1779,9 +1806,9 @@ int main(int argc , char *argv[])
 
     /* 退出清理 */
 error_out:
-
     sleep(1);
-    /* 删除进、出、命令消息队列key */
+
+    /* 删除命令消息队列key */
 	if ( msgctl((key_t)QID_CMD , IPC_RMID , NULL) ){
 	    log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_CMD);
     }
@@ -1797,9 +1824,6 @@ error_out:
     /* 删除信号量key */
     union semun arg;
     arg.val = (short)0;
-    if ( semctl(g_semid,0,IPC_RMID,arg) ) {
-	    log_write(SYSLOG , LOGERR ,"semctl删除semid=%d失败",g_semid);
-    }
     if ( semctl(g_mon_semid,0,IPC_RMID,arg) ){
 	    log_write(SYSLOG , LOGERR ,"semctl删除semid=%d失败",g_mon_semid);
     }

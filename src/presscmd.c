@@ -67,9 +67,9 @@ int main(int argc , char *argv[])
             exit(0);
         }
         if ( press_pid > 0 ) {
-            printf("(守护pid:%d,输入help查看命令)>" , press_pid);
+            printf("(DEAMON PID:%d)$ " , press_pid);
         } else {
-            printf("(输入deam启动守护或exit退出)>");
+            printf("(NO DEAMON)$ ");
         }
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
@@ -85,23 +85,21 @@ int main(int argc , char *argv[])
                 system("press");
                 exit(0);
             } else if ( pid > 0 ){
-                printf("开始启动守护进程 ");
-                int timeout = 40;
+                int timeout = 3;
                 while(-- timeout){
-                    usleep(25000);
-                    printf(".");
                     press_pid = check_deamon();
                     if ( press_pid > 0 ){
 	                    if ( (qid = get_qid("MSGKEY_CMD")) < 0){
-	                        printf("ERROR: MSGKEY_CMD error\n");
+	                        printf("内部错误:无法从配置文件读取MSGKEY_CMD\n");
 	                        exit(1);
 	                    }
-                        printf(" 启动成功\n");
+                        printf("守护进程启动成功\n");
                         break;
                     }
+                    sleep(1);
                 }
                 if ( timeout == 0 ){
-                    printf(" 启动等待超时失败,请查看日志\n");
+                    printf("守护进程启动等待超时失败,请查看日志\n");
                     exit(1);
                 } else {
                     continue;
@@ -124,6 +122,7 @@ int main(int argc , char *argv[])
             print_usage();
             continue;
         } else if ( press_pid == 0 ){
+            printf("输入deam启动守护进程\n");
             continue;
         }
 
@@ -132,7 +131,7 @@ int main(int argc , char *argv[])
 
         /* activate monitor mode */
         if ( memcmp( inputLine ,  "moni" , 4) == 0 ){
-            strcpy(inputLine , "stat");
+            strcpy(inputLine , "moni");
             system("clear");
             monitor_mode = 1;
             outflag = 0;
@@ -182,7 +181,18 @@ TAGMONITOR:
 
         if ( memcmp(inputLine , "kill" , 4) == 0 ){
             /* wait for deamon to exit */
-            sleep(1);
+            int timeout = 5;
+            while(-- timeout){
+                press_pid = check_deamon();
+                if ( press_pid == 0 ){
+                    printf("守护进程停止成功\n");
+                    break;
+                }
+                sleep(1);
+            }
+            if ( timeout == 0 ){
+                printf("守护进程停止等待超时,请查看日志\n");
+            } 
             continue;
         }
     }

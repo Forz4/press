@@ -17,6 +17,9 @@
 #define REPTYPE_FILE    2
 #define REPTYPE_F7      3
 
+#define STAT_CONN       0x1
+#define STAT_PACK       0x10
+
 const char *PRESS_VERSION = "V1.0";
 
 typedef struct comm_proc{
@@ -121,15 +124,15 @@ void    cal_time_ns(int tps , struct timespec *ts);
 int     pack_cat_start(cat_proc_st *p_catcher);
 void    pack_cat_signal_handler(int signo);
 int     sem_init();
-void    sem_destroy(int semid);
-int     sem_lock(int semid);
-int     sem_unlock(int semid);
+void    sem_destroy(int);
+int     sem_lock(int);
+int     sem_unlock(int);
 void    send_idle(int);
 rule_st *get_rule(FILE *fp);
 int     get_template(FILE *fp_tpl , tpl_st *mytpl);
 void    cleanRule(rule_st *ruleHead);
 void    reply(char *reply);
-char    *get_stat(conn_config_st * , pack_config_st *);
+char    *get_stat(int, conn_config_st * , pack_config_st *);
 char    *adjust_status(int , char * , pack_config_st *);
 void    status_op(int flag , int id , int adjustment , int percent , int direc , int *before , int *after);
 
