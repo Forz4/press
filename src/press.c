@@ -458,6 +458,7 @@ int conn_jips_start(comm_proc_st *p_jips)
 	socklen_t socket_len = sizeof(client_addr);
 	/* 发包控制变量 */
 	int len = 0;
+    char lenAscii[5];
 	int recvlen = 0;
 	int textlen = 0;
 	int nTotal = 0;
@@ -520,11 +521,15 @@ int conn_jips_start(comm_proc_st *p_jips)
 	    		}
 	    	}
             
+            sem_lock(g_mon_semid);
             g_mon_stat->recv_num ++;
+            sem_unlock(g_mon_semid);
 
             if ( p_jips->persist == 1 ){
 	    	    msgs.type = 1;
 	    	    memcpy(msgs.text , buffer , textlen + 4);
+                sprintf( lenAscii , "%4d" , textlen);
+                memcpy( msgs.text , lenAscii , 4);
 
                 gettimeofday( &ts , NULL );
                 memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
@@ -577,7 +582,9 @@ int conn_jips_start(comm_proc_st *p_jips)
 	    		nLeft -= nSent;
 	    	}
 
+            sem_lock(g_mon_semid);
             g_mon_stat->send_num ++;
+            sem_unlock(g_mon_semid);
 
             if ( p_jips->persist == 1 ){
                 gettimeofday(&ts , NULL);
