@@ -19,6 +19,7 @@
 
 #define STAT_CONN       0x1
 #define STAT_PACK       0x10
+#define STAT_MONI       0x100
 
 const char *PRESS_VERSION = "V1.0";
 
