@@ -628,7 +628,7 @@ void conn_jips_signal_handler(int signo)
 {
     kill( pidRecv , SIGTERM);
     kill( pidSend , SIGTERM);
-    log_write(SYSLOG , LOGERR , "jips quit , killing process pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
+    log_write(SYSLOG , LOGERR , "外卡通讯进程退出, pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
     exit(0);
 }
 /* 停止通讯模块 */
@@ -667,7 +667,7 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     cat_proc_st *cat_cur = NULL;
     char    value[MAX_CFG_VAL_LEN];
 
-    log_write(SYSLOG , LOGDBG , "loading pack configs");
+    log_write(SYSLOG , LOGDBG , "开始加载组包进程配置");
     p_pack_conf->pit_head = NULL;
     p_pack_conf->cat_head = NULL;
 
@@ -680,12 +680,12 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     
     /* load qids*/
     if ( (p_pack_conf->qid_out = get_qid("MSGKEY_OUT")) < 0){
-        log_write(SYSLOG , LOGERR , "MSGKEY_OUT not found");
+        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_OUT]配置");
         return -1;
     }
 
     if ( (p_pack_conf->qid_in = get_qid("MSGKEY_IN")) < 0){
-        log_write(SYSLOG , LOGERR , "MSGKEY_IN not found");
+        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_IN]配置");
         return -1;
     }
 
@@ -698,7 +698,7 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     for ( int i = 0 ; i < CATCHER_NUM ; i ++ ){
         cat_cur= (cat_proc_st *)malloc(sizeof(cat_proc_st));
         if(cat_cur == NULL){
-            log_write(SYSLOG , LOGERR , "malloc fails");
+            log_write(SYSLOG , LOGERR , "内部错误:malloc for cat_proc_st失败");
             return -1;
         }
         cat_cur->qid = p_pack_conf->qid_in;
@@ -716,7 +716,7 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     sprintf(pathname , "%s/cfg/%s" , getenv("PRESS_HOME") , filename);
     fp = fopen(pathname , "r");
     if ( fp == NULL ){
-        log_write(SYSLOG , LOGERR , "pack config file [%s] not found" , filename);
+        log_write(SYSLOG , LOGERR , "组包进程配置文件[%s]未找到" , filename);
         return -1;
     }
 
@@ -725,11 +725,11 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         if ( line[0] == '\n' || line[0] == '#' )
             continue;
 
-        log_write(SYSLOG , LOGDBG , "pack.cfg line[%s]" , line);
+        log_write(SYSLOG , LOGDBG , "pack.cfg 记录[%s]" , line);
 
         pit_cur = (pit_proc_st *)malloc(sizeof(pit_proc_st));
         if ( pit_cur == NULL ){
-            log_write(SYSLOG , LOGERR , "PRESS DAEMON: malloc fails");
+            log_write(SYSLOG , LOGERR , "内部错误:malloc for pit_proc_st失败");
             fclose(fp);
             return -1;
         }
@@ -738,11 +738,11 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 
         /* get tpl file */
         if (get_bracket(line , 1 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg format error");
+            log_write(SYSLOG , LOGERR , "pack.cfg第1域格式错误");
             fclose(fp);
             return -1;
         }
-        log_write(SYSLOG , LOGDBG , "tpl_filename[%s]" ,buf );
+        log_write(SYSLOG , LOGDBG , "读取第1域模板文件名[%s]" ,buf );
 
         strcpy(pit_cur->tplFileName , buf);
 
@@ -750,44 +750,44 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         sprintf(pathname , "%s/data/tpl/%s" , getenv("PRESS_HOME") , buf);
         pit_cur->tpl_fp = fopen(pathname , "r");
         if ( pit_cur->tpl_fp == NULL ){
-            log_write(SYSLOG , LOGERR , "can not open tpl file[%s]",pathname);
+            log_write(SYSLOG , LOGERR , "无法找到模板文件[%s]",pathname);
             fclose(fp);
             return -1;
         }
 
         /* get rule */
         if (get_bracket(line , 2 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg format error");
+            log_write(SYSLOG , LOGERR , "pack.cfg第2域格式错误");
             fclose(fp);
             return -1;
         }
-        log_write(SYSLOG , LOGDBG , "rule_filename[%s]" ,buf );
+        log_write(SYSLOG , LOGDBG , "读取第2域替换规则文件名[%s]" ,buf );
         memset(pathname , 0x00 , sizeof(pathname));
         sprintf(pathname , "%s/data/rule/%s" , getenv("PRESS_HOME") , buf);
         pit_cur->rule_fp = fopen(pathname , "r");
         if ( pit_cur->rule_fp == NULL ){
-            log_write(SYSLOG , LOGERR , "can not open rule file[%s]",pathname);
+            log_write(SYSLOG , LOGERR , "无法找到替换规则文件[%s]",pathname);
             fclose(fp);
             return -1;
         }
 
         /*get tps*/
         if (get_bracket(line , 3 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg format error");
+            log_write(SYSLOG , LOGERR , "pack.cfg第3域格式错误");
             fclose(fp);
             return -1;
         }
         pit_cur->tps = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "tps[%d]" ,pit_cur->tps );
+        log_write(SYSLOG , LOGDBG , "读取第3域tps[%d]" ,pit_cur->tps );
 
         /* get time */
         if (get_bracket(line , 4 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg format error");
+            log_write(SYSLOG , LOGERR , "pack.cfg第4域格式错误");
             fclose(fp);
             return -1;
         }
         pit_cur->time = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "time[%d]" ,pit_cur->time );
+        log_write(SYSLOG , LOGDBG , "读取第4域发送时间time[%d]" ,pit_cur->time );
 
         /* get qid */
         pit_cur->qid = p_pack_conf->qid_out;
@@ -799,19 +799,19 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     }
 
     if ( count == 0 ){
-        log_write(SYSLOG , LOGERR , "pack.cfg is empty");
+        log_write(SYSLOG , LOGERR , "组包配置文件为空");
         fclose(fp);
         return 0;
     }
 
     fclose(fp);
-    log_write(SYSLOG , LOGDBG , "pack.cfg loaded");
+    log_write(SYSLOG , LOGDBG , "组包配置文件已加载");
     return 0;
 }
 
 int pack_config_free(pack_config_st *p_pack_conf)
 {
-    log_write(SYSLOG , LOGDBG , "clearing configs");
+    log_write(SYSLOG , LOGDBG , "开始清理组包配置");
     pack_config_st *cur = p_pack_conf;
     pit_proc_st *pit_cur = NULL;
     pit_proc_st *pit_del = NULL;
@@ -837,7 +837,7 @@ int pack_config_free(pack_config_st *p_pack_conf)
         free(cat_del);
     }
 
-    log_write(SYSLOG , LOGDBG ,  "clearing configs end");
+    log_write(SYSLOG , LOGDBG ,  "清理组包配置完成");
     return 0;
 }
 
@@ -857,7 +857,7 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
     } else {
         strcpy(buf , msg+i);
     }
-    log_write(SYSLOG , LOGINF , "load %s" , buf);
+    log_write(SYSLOG , LOGINF , "开始加载组包配置文件%s" , buf);
 
     ret = pack_config_load( buf , p_pack_conf );
     if ( ret ){
@@ -875,7 +875,7 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
     lastTimeRecvNum = 0;
     memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
 
-    log_write(SYSLOG , LOGINF , "pitcher config loaded " );
+    log_write(SYSLOG , LOGINF , "组包配置文件加载完成 " );
     return 0;
 }
 
@@ -886,13 +886,13 @@ int pack_send(pack_config_st *p_pack_conf)
     /* start catcher */
     while (cat_cur != NULL){
         cat_cur->pid  = pack_cat_start(cat_cur);
-        log_write(SYSLOG , LOGINF , "catcher start , PID[%d]",cat_cur->pid);
+        log_write(SYSLOG , LOGINF , "持久化进程启动,PID[%d]",cat_cur->pid);
         cat_cur = cat_cur->next;
     }
     /* start pitchers */
     while ( cur != NULL ) {
         cur->pid = pack_pit_start(cur);
-        log_write(SYSLOG , LOGINF , "pitcher start , PID[%d]" ,cur->pid);
+        log_write(SYSLOG , LOGINF , "组包进程启动,PID[%d]" ,cur->pid);
         cur = cur->next;
     }
     p_pack_conf->status = RUNNING;
@@ -911,7 +911,7 @@ int pack_shut(pack_config_st *p_pack_conf)
             kill(pit_cur->pid , SIGTERM);
             l_stat = g_stat+pit_cur->index;
             l_stat->tag = FINISHED;
-            log_write(SYSLOG , LOGINF , "killing pitcher pid[%d]" , pit_cur->pid);
+            log_write(SYSLOG , LOGINF , "停止组包进程,pid[%d]" , pit_cur->pid);
         }
         pit_cur = pit_cur->next;
     }
@@ -919,7 +919,7 @@ int pack_shut(pack_config_st *p_pack_conf)
     while ( cat_cur != NULL ){
         if( cat_cur->pid){
             kill(cat_cur->pid , SIGTERM);
-            log_write(SYSLOG , LOGINF , "killing catcher pid[%d]" , cat_cur->pid);
+            log_write(SYSLOG , LOGINF , "停止持久化进程,pid[%d]" , cat_cur->pid);
         }
         cat_cur = cat_cur->next;
     }
@@ -989,14 +989,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     /* load template */
     memset(&mytpl , 0x00 , sizeof(mytpl));
     if (get_template(p_pitcher->tpl_fp , &mytpl)){
-        log_write(SYSLOG , LOGERR , "load template file fail");
+        log_write(SYSLOG , LOGERR , "加载模板文件内容失败");
         fclose(p_pitcher->tpl_fp);
         exit(-1);
     }
     /* load rules */
     ruleHead = get_rule(p_pitcher->rule_fp);
     if (ruleHead == NULL){
-        log_write(SYSLOG , LOGERR , "load rules fail");
+        log_write(SYSLOG , LOGERR , "加载替换规则文件失败");
         fclose(p_pitcher->rule_fp);
         exit(-1);
     }
@@ -1012,7 +1012,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         while (currule != NULL){
             memset(temp , 0x00 , sizeof(temp));
             if ( currule->type == REPTYPE_RANDOM ){
-                random = rand()%((int)pow(10,currule->length));
+                random = rand()%((int)_pow(10,currule->length));
                 sprintf( temp , "%0*d" , currule->length , random);
             } else if ( currule->type == REPTYPE_FILE ){
                 strcpy(temp , currule->rep_head->text);
@@ -1028,7 +1028,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         /* send to out queue */
         ret = msgsnd((key_t)p_pitcher->qid , &msgs , sizeof(msg_st) - sizeof(long) , 0);
         if (ret < 0){
-            log_write(SYSLOG , LOGERR , "pitcher msgsnd error");
+            log_write(SYSLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
             exit(1);
         }
         /* update share memory*/
@@ -1071,10 +1071,10 @@ int pack_cat_start(cat_proc_st *p_catcher)
     char pathname[MAX_PATHNAME_LEN];
 
     memset(pathname , 0x00 , sizeof(pathname));
-    sprintf(pathname , "%s/data/result%d.txt" , getenv("PRESS_HOME") , getpid());
+    sprintf(pathname , "%s/data/result/%d.txt" , getenv("PRESS_HOME") , getpid());
     fp = fopen(pathname , "w+");
     if (fp == NULL){
-        log_write(SYSLOG , LOGERR , "can not open result.txt");
+        log_write(SYSLOG , LOGERR , "内部错误:无法打开持久化结果文件[%s]",pathname);
         exit(1);
     }
 
@@ -1086,7 +1086,7 @@ int pack_cat_start(cat_proc_st *p_catcher)
                         0, \
                         0 );
         if (ret < 0){
-            log_write(SYSLOG , LOGERR , "msgrcv error");
+            log_write(SYSLOG , LOGERR , "内部错误:持久化进程调用msgrcv失败,ret[%d],errno[%d]",ret,errno);
             exit(1);
         }
         alarm(0);
@@ -1118,7 +1118,7 @@ int pack_cat_start(cat_proc_st *p_catcher)
 }
 void pack_cat_signal_handler(int signo)
 {
-    log_write(SYSLOG , LOGDBG , "catcher quit");
+    log_write(SYSLOG , LOGDBG , "持久化进程退出");
     exit(0);
 }
 /*
@@ -1192,7 +1192,7 @@ rule_st *get_rule(FILE *fp)
     memset(line , 0x00 , sizeof(line));
     memset(buf , 0x00 , sizeof(buf));
 
-    log_write(SYSLOG , LOGDBG , "enter get_rule");
+    log_write(SYSLOG , LOGDBG , "开始加载替换规则");
 
     while( fgets(line , sizeof(line) , fp) != NULL ){
 
@@ -1201,7 +1201,7 @@ rule_st *get_rule(FILE *fp)
 
         cur = (rule_st *)malloc(sizeof(rule_st));
         if ( cur == NULL ){
-            log_write(SYSLOG , LOGERR , "malloc fails");
+            log_write(SYSLOG , LOGERR , "内部错误:malloc for rule_st失败");
             fclose(fp);
             return NULL;
         }
@@ -1211,34 +1211,34 @@ rule_st *get_rule(FILE *fp)
         /*第一域为替换起始位置*/
         if (get_bracket(line , 1 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "rule file format error");
+            log_write(SYSLOG , LOGERR , "替换规则文件第1域格式错误");
             return NULL;
         }
         cur->start = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "rule->start[%d]" , cur->start);
+        log_write(SYSLOG , LOGDBG , "读取替换规则第1域，起始位置[%d]" , cur->start);
 
         /* 第二域为替换长度*/
         if (get_bracket(line , 2 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "rule file format error");
+            log_write(SYSLOG , LOGERR , "替换规则文件第2域格式错误");
             return NULL;
         }
         cur->length = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "rule->length[%d]" , cur->length);
+        log_write(SYSLOG , LOGDBG , "读取替换规则第2域，替换长度[%d]" , cur->length);
 
         /* 第三域为补位方式*/
         if (get_bracket(line , 3 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "rule file format error");
+            log_write(SYSLOG , LOGERR , "替换规则文件第3域格式错误");
             return NULL;
         }
         cur->pad = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "pad[%d]" , cur->pad);
+        log_write(SYSLOG , LOGDBG , "读取替换规则第3域，补位方式[%d]" , cur->pad);
 
         /* 第四域为替换方式*/
         if (get_bracket(line , 4 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "rule file format error");
+            log_write(SYSLOG , LOGERR , "替换规则文件第4域格式错误");
             return NULL;
         }
         if ( strncmp( buf , "RAND" , 4 ) == 0  ){
@@ -1294,25 +1294,26 @@ rule_st *get_rule(FILE *fp)
             /* 类型3: 7域 */
             cur->type = REPTYPE_F7;
         }
+        log_write(SYSLOG , LOGDBG , "读取替换规则第5域，替换方式[%d]" , cur->type);
 
         cur->rep_head = rep_head;
 
         cur->next = ret;
         ret = cur;
     }
-    log_write(SYSLOG , LOGDBG , "rule loaded");
+    log_write(SYSLOG , LOGDBG , "替换规则加载完成");
     return ret;
 }
 
 int get_template(FILE *fp_tpl , tpl_st *mytpl)
 {
     if ( fread(mytpl->text , 1 , 4 , fp_tpl) < 4){
-        log_write(SYSLOG , LOGERR , "template file error");
+        log_write(SYSLOG , LOGERR , "读取模板报文4位长度失败");
         return -1;
     }
     mytpl->len = get_length(mytpl->text);
     if ( fread(mytpl->text + 4 , 1 , mytpl->len , fp_tpl) < mytpl->len ){
-        log_write(SYSLOG , LOGERR , "template file error");
+        log_write(SYSLOG , LOGERR , "读取模板报文内容失败");
         return -1;
     }
     return 0;
@@ -1437,7 +1438,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             offset += sprintf(ret+offset , \
                     "===========================================================================\n\n");
         } else {
-            offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置");
+            offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置\n");
         }
     }
     if ( flag & STAT_MONI ){
@@ -1771,7 +1772,7 @@ int main(int argc , char *argv[])
             conn_stop(p_conn_conf);
             break;
         } else if ( strncmp(msgs.text , "stat" , 4) == 0){
-            retmsg = get_stat( STAT_CONN|STAT_PACK , p_conn_conf , p_pack_conf);
+            retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             reply(retmsg);
             free(retmsg);
         } else if ( strncmp(msgs.text , "moni" , 4) == 0){

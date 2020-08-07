@@ -69,7 +69,7 @@ int main(int argc , char *argv[])
         if ( press_pid > 0 ) {
             printf("(DEAMON PID:%d)$ " , press_pid);
         } else {
-            printf("(NO DEAMON)$ ");
+            printf("(输入deam启动守护或help查看命令)$ ");
         }
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
@@ -122,7 +122,6 @@ int main(int argc , char *argv[])
             print_usage();
             continue;
         } else if ( press_pid == 0 ){
-            printf("输入deam启动守护进程\n");
             continue;
         }
 

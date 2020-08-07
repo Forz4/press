@@ -200,3 +200,11 @@ extern int check_deamon()
         return 0;
     }
 }
+extern int _pow(int base , int m)
+{
+    int ret = 1;
+    while (m --){
+        ret *= base;
+    }
+    return ret;
+}

@@ -36,7 +36,6 @@ extern void lTrim(char *str);
 extern int loadConfig(char *key , char *value  ,int val_len);
 void daemon_start();
 extern int check_deamon();
-
-
+extern int _pow(int , int);
 
 #endif
