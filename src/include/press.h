@@ -21,6 +21,9 @@
 #define STAT_PACK       0x10
 #define STAT_MONI       0x100
 
+#define TRAN_TYPE_REQ   35
+#define TRAN_TYPE_RES   36
+
 const char *PRESS_VERSION = "V1.0";
 
 typedef struct comm_proc{
@@ -57,6 +60,7 @@ typedef struct pit_proc{
 typedef struct cat_proc{
 	pid_t 	pid;
 	int 	qid;
+    int     type;
     struct  cat_proc *next;
 }cat_proc_st;
 

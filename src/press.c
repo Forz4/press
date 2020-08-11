@@ -300,13 +300,13 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         sem_unlock(g_mon_semid);
 
         if ( p_receiver->persist == 1 ){
-            msgs.type = 1;
             nTranlen = get_length(buffer);
             memcpy(msgs.text , buffer , nTranlen + 4);
 
             gettimeofday( &ts , NULL );
             memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
             msgs.flag = 'I';
+            msgs.type = TRAN_TYPE_RES;
             ret = msgsnd((key_t)p_receiver->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
             if (ret < 0){
                 log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_receiver->qidSend);
@@ -420,6 +420,7 @@ int conn_sender_start(comm_proc_st *p_sender)
             gettimeofday(&ts , NULL);
             memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
             msgs.flag = 'O';
+            msgs.type = TRAN_TYPE_REQ;
             ret = msgsnd((key_t)p_sender->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
             if (ret < 0){
                 log_write(SYSLOG , LOGERR , "通讯发送进程调用msgsnd持久化失败,msgid[%d]" , p_sender->qidSend);
@@ -570,13 +571,13 @@ int conn_jips_start(comm_proc_st *p_jips)
             nSent = 0;
             nLeft = len;
             while( nTotal != len + 4){
-                nSent = send(sock_send , msgs.text + nTotal , nLeft , 0);
+                nSent = send(sock_recv , msgs.text + nTotal , nLeft , 0);
                 if (nSent == 0){
                     break;
                 }
                 else if (nSent < 0){
                     log_write(SYSLOG , LOGERR , "外卡通讯进程调用send失败");
-                    close(sock_send);
+                    close(sock_recv);
                     exit(0);
                 }
                 nTotal += nSent;
@@ -702,6 +703,22 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
             return -1;
         }
         cat_cur->qid = p_pack_conf->qid_in;
+        cat_cur->type = TRAN_TYPE_REQ;
+        if ( p_pack_conf->cat_head != NULL ){
+            cat_cur->next = p_pack_conf->cat_head->next;
+            p_pack_conf->cat_head->next = cat_cur;
+        } else {
+            p_pack_conf->cat_head = cat_cur;
+            cat_cur->next = NULL;
+        }
+
+        cat_cur= (cat_proc_st *)malloc(sizeof(cat_proc_st));
+        if(cat_cur == NULL){
+            log_write(SYSLOG , LOGERR , "内部错误:malloc for cat_proc_st失败");
+            return -1;
+        }
+        cat_cur->qid = p_pack_conf->qid_in;
+        cat_cur->type = TRAN_TYPE_RES;
         if ( p_pack_conf->cat_head != NULL ){
             cat_cur->next = p_pack_conf->cat_head->next;
             p_pack_conf->cat_head->next = cat_cur;
@@ -1071,7 +1088,10 @@ int pack_cat_start(cat_proc_st *p_catcher)
     char pathname[MAX_PATHNAME_LEN];
 
     memset(pathname , 0x00 , sizeof(pathname));
-    sprintf(pathname , "%s/data/result/%d.txt" , getenv("PRESS_HOME") , getpid());
+    if ( p_catcher->type == TRAN_TYPE_REQ )
+        sprintf(pathname , "%s/data/result/req.%d" , getenv("PRESS_HOME") , getpid());
+    else if ( p_catcher->type == TRAN_TYPE_RES )
+        sprintf(pathname , "%s/data/result/res.%d" , getenv("PRESS_HOME") , getpid());
     fp = fopen(pathname , "w+");
     if (fp == NULL){
         log_write(SYSLOG , LOGERR , "内部错误:无法打开持久化结果文件[%s]",pathname);
@@ -1083,7 +1103,7 @@ int pack_cat_start(cat_proc_st *p_catcher)
         ret = msgrcv(    (key_t)p_catcher->qid , \
                         &msgs , \
                         sizeof(msg_st) - sizeof(long) , \
-                        0, \
+                        p_catcher->type, \
                         0 );
         if (ret < 0){
             log_write(SYSLOG , LOGERR , "内部错误:持久化进程调用msgrcv失败,ret[%d],errno[%d]",ret,errno);
@@ -1091,11 +1111,8 @@ int pack_cat_start(cat_proc_st *p_catcher)
         }
         alarm(0);
 
-        if ( msgs.flag == 'O' ){
-            fprintf( fp , "%ld.%06d >>>" , msgs.ts.tv_sec , msgs.ts.tv_usec );
-        } else if ( msgs.flag == 'I' ){
-            fprintf( fp , "%ld.%06d <<<" , msgs.ts.tv_sec , msgs.ts.tv_usec );
-        }
+        fprintf( fp , "%ld.%06d " , msgs.ts.tv_sec , msgs.ts.tv_usec);
+
         int len = get_length(msgs.text);
         if ( ENCODING == 'H' ){
             memset( hex , 0x00 , MAX_MSG_LEN);
