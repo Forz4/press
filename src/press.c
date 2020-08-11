@@ -307,10 +307,12 @@ int conn_receiver_start(comm_proc_st *p_receiver)
             memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
             msgs.flag = 'I';
             msgs.type = TRAN_TYPE_RES;
+            msgs.length = nTranlen + 4;
             ret = msgsnd((key_t)p_receiver->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
             if (ret < 0){
                 log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_receiver->qidSend);
             }
+
         }
     }
     close(sock_recv);
@@ -393,12 +395,11 @@ int conn_sender_start(comm_proc_st *p_sender)
             alarm(0);
         }
 
-        len = get_length(msgs.text);
-
+        len = msgs.length;
         nTotal = 0;
         nSent = 0;
-        nLeft = len + 4;
-        while( nTotal != len + 4){
+        nLeft = len;
+        while( nTotal != len){
             nSent = send(sock_send , msgs.text + nTotal , nLeft , 0);
             if (nSent == 0){
                 break;
@@ -1019,6 +1020,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     }
 
     msgs.type = 1;
+    msgs.length = mytpl.len + 4;
     gettimeofday(&tv_begin,NULL);
     while( l_stat->left_num > 0 ){
         gettimeofday(&tv_start,NULL);
@@ -1070,8 +1072,6 @@ int pack_pit_start(pit_proc_st *p_pitcher)
 int pack_cat_start(cat_proc_st *p_catcher)
 {
     int pid;
-    int i , j;
-    char hex[MAX_MSG_LEN];
     pid = fork();
     if ( pid < 0 ){
         return -1;
@@ -1113,18 +1113,39 @@ int pack_cat_start(cat_proc_st *p_catcher)
 
         fprintf( fp , "%ld.%06d " , msgs.ts.tv_sec , msgs.ts.tv_usec);
 
-        int len = get_length(msgs.text);
+        int len = msgs.length;
         if ( ENCODING == 'H' ){
-            memset( hex , 0x00 , MAX_MSG_LEN);
-            j = 0;
-            for ( i = 0 ; i < len+4 && j < MAX_MSG_LEN ; i ++ ){
-                hex[j]   = msgs.text[i] / 16 + '0';
-                hex[j+1] = msgs.text[i] % 16 + '0';
-                j += 2;
+            fprintf( fp , "HEX PRINT START\n");
+            int i = 0;
+            int j = 0;
+            char ch = ' ';
+            for ( i = 0 ; i <= len/16 ; i ++){
+                fprintf( fp , "%06d " , i);
+                for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
+                    ch = msgs.text[j+i*16];
+                    fprintf( fp , "%c%c " , \
+                            ch/16 >= 10 ? ch/16-10+'A': ch/16+'0',\
+                            ch%16 >= 10 ? ch%16-10+'A': ch%16+'0');
+                }
+                while ( j++ < 16 ){
+                    fprintf( fp , "   ");
+                }
+                fprintf( fp , "|");
+                for ( j = 0 ; j+i*16 < len && j < 16 ; j ++ ){
+                    int pos = j+i*16;
+                    if ( (msgs.text[pos] >= 'a' && msgs.text[pos] <= 'z') ||
+                         (msgs.text[pos] >= 'A' && msgs.text[pos] <= 'Z') || 
+                         (msgs.text[pos] >= '0' && msgs.text[pos] <= '9') ){
+                        fprintf( fp , "%c",msgs.text[pos]);
+                    } else {
+                        fprintf( fp , ".");
+                    }
+                }
+                fprintf( fp , "\n");
             }
-            fprintf( fp , "%s\n" , hex);
+            fprintf( fp , "================HEX PRINT END\n");
         } else {
-            fwrite(msgs.text , 1 , len + 4 , fp);
+            fwrite(msgs.text , 1 , len , fp);
             fwrite("\n" , 1, 1 , fp);
         }
         fflush(fp);
@@ -1824,7 +1845,7 @@ int main(int argc , char *argv[])
             retmsg = adjust_status( 2 , msgs.text , p_pack_conf);
             reply(retmsg);
             free(retmsg);
-        }
+        } 
     }
 
     /* 退出清理 */

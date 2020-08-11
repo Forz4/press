@@ -21,6 +21,7 @@
 
 typedef struct message_struct{
 	long type;
+    int  length;
 	char text[MAX_MSG_LEN];
     char flag;  /* to tell a sender or receiver*/
     int  pid;   /* to indicate to pid of sender */

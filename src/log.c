@@ -1,7 +1,7 @@
 #include "include/log.h"
 
-static log_t *log_head = NULL;
-static log_level_t	LOGLEVEL;
+log_t *log_head = NULL;
+log_level_t	LOGLEVEL;
 
 int log_init(log_type_t type , char *filename)
 {
