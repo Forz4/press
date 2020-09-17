@@ -101,6 +101,9 @@ int conn_config_load(conn_config_st *p_conn_conf)
         } else if ( cur->type == 'J' ){
             cur->qidRead = p_conn_conf->qid_out;
             cur->qidSend = p_conn_conf->qid_in;
+        } else if ( cur->type == 'X' ){
+            cur->qidRead = p_conn_conf->qid_out;
+            cur->qidSend = p_conn_conf->qid_in;
         }
 
         if (get_bracket(line , 2 , buf , 100)){
@@ -123,6 +126,11 @@ int conn_config_load(conn_config_st *p_conn_conf)
             return -1;
         }
         cur->persist = atoi(buf);
+
+        if (get_bracket(line , 5 , buf , 100)){
+            cur->parallel = 1;
+        }
+        cur->parallel = atoi(buf);
 
         count ++;
         cur->next = p_conn_conf->process_head;
@@ -203,6 +211,17 @@ int conn_start(conn_config_st *p_conn_conf)
             } else {
                 log_write(SYSLOG , LOGINF , "外卡通讯进程启动失败 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                 cur->pid = ret;
+            }
+        } else if ( cur->type == 'X' ){
+            int i = 0 ;
+            for ( i = 0 ; i < cur->parallel ; i ++ ){
+                ret = conn_sender_start(cur);
+                if ( ret < 0 ){
+                    log_write(SYSLOG , LOGERR , "短链接通讯发送进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                } else {
+                    log_write(SYSLOG , LOGINF , "短链接通讯发送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                    cur->para_pids[i] = ret;
+                }
             }
         }
         cur = cur->next;
@@ -350,12 +369,12 @@ int conn_sender_start(comm_proc_st *p_sender)
     int nLeft = 0;
     struct timeval ts;
 
-    sock_send = socket(AF_INET , SOCK_STREAM , 0);
-
-    memset(&servaddr , 0 , sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(p_sender->port);
-    servaddr.sin_addr.s_addr = inet_addr(p_sender->ip);
+    /* 短链接读使用 */
+    int recvlen = 0;
+    int textlen = 0;
+    int nRead = 0;
+    int nTranlen = 0;
+    char buffer[MAX_LINE_LEN];
 
     /* relocate share memory */
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
@@ -364,18 +383,27 @@ int conn_sender_start(comm_proc_st *p_sender)
         return -1;
     }
 
-    while (1){
-        if (connect(sock_send , (struct sockaddr*)&servaddr , sizeof(servaddr)) < 0){
-            close(sock_send);
-            sock_send = socket(AF_INET , SOCK_STREAM , 0);
-            sleep(1);
-            continue;
-        }
-        break;
-    }
-    log_write(SYSLOG , LOGINF , "通讯发送进程连接成功");
-
+    int connected = 0;
     while(1){
+        /* 链接 */
+        if ( connected == 0 || p_sender->type == 'X' ){
+            connected = 1;
+            sock_send = socket(AF_INET , SOCK_STREAM , 0);
+            memset(&servaddr , 0 , sizeof(servaddr));
+            servaddr.sin_family = AF_INET;
+            servaddr.sin_port = htons(p_sender->port);
+            servaddr.sin_addr.s_addr = inet_addr(p_sender->ip);
+            while (1){
+                if (connect(sock_send , (struct sockaddr*)&servaddr , sizeof(servaddr)) < 0){
+                    close(sock_send);
+                    sock_send = socket(AF_INET , SOCK_STREAM , 0);
+                    sleep(1);
+                    continue;
+                }
+                break;
+            }
+        }
+
         if (HEART_INTERVAL > 0){
             sigsetjmp(jmpbuf , 1);
             signal(SIGALRM , send_idle);
@@ -427,6 +455,49 @@ int conn_sender_start(comm_proc_st *p_sender)
                 log_write(SYSLOG , LOGERR , "通讯发送进程调用msgsnd持久化失败,msgid[%d]" , p_sender->qidSend);
             }
         }
+        
+/*=========== 短链接的逻辑 ==============*/
+        if ( p_sender->type == 'X' ){
+            recvlen = recv(sock_send , buffer , 4 , 0);
+            if (recvlen < 0){
+                break;
+            } else if ( strncmp(buffer , "0000" , 4) == 0){
+                continue;
+            } else {
+                textlen = atoi(buffer);
+                nTotal = 0;
+                nRead = 0;
+                nLeft = textlen;
+                while(nTotal != textlen){
+                    nRead = recv(sock_send , buffer + 4 + nTotal , nLeft , 0);
+                    if (nRead == 0)    break;
+                    nTotal += nRead;
+                    nLeft -= nRead;
+                }
+            }
+
+            sem_lock(g_mon_semid);
+            g_mon_stat->recv_num ++;
+            sem_unlock(g_mon_semid);
+
+            if ( p_sender->persist == 1 ){
+                nTranlen = get_length(buffer);
+                memcpy(msgs.text , buffer , nTranlen + 4);
+
+                gettimeofday( &ts , NULL );
+                memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
+                msgs.flag = 'I';
+                msgs.type = TRAN_TYPE_RES;
+                msgs.length = nTranlen + 4;
+                ret = msgsnd((key_t)p_sender->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+                if (ret < 0){
+                    log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_sender->qidSend);
+                }
+
+            }
+            close( sock_send );
+        }
+/*=========== 短链接的逻辑 ==============*/
     }
     close(sock_send);
     return 0;
@@ -649,7 +720,14 @@ int conn_stop(conn_config_st *p_conn_conf)
     cur = p_conn_conf->process_head;
     while (cur != NULL){
         log_write(SYSLOG , LOGINF , "停止通讯进程 pid[%d]", cur->pid);
-        kill(cur->pid , SIGTERM);
+        if ( cur->type == 'X' ){
+            int i = 0;
+            for ( i = 0 ;i < cur->parallel ; i ++ ){
+                kill(cur->para_pids[i] , SIGTERM);
+            }
+        } else {
+            kill(cur->pid , SIGTERM);
+        }
         cur=cur->next;
     }
     p_conn_conf->status = NOTLOADED;
@@ -1411,14 +1489,25 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[类型][IP             ][端口  ][状态  ]\n");
+                    "[类型][IP             ][端口  ][状态   ]\n");
             while ( p_comm != NULL ){
                 memset( status , 0x00 , sizeof(status));
                 memset( type , 0x00 , sizeof(type));
-                if ( kill( p_comm->pid , 0 ) == 0 ){
-                    strcpy(status , "运行中");
+                if ( p_comm->type == 'X' ){
+                    int i = 0 ;
+                    int count = 0;
+                    for(i = 0 ; i < p_comm->parallel ; i ++ ){
+                        if ( kill( p_comm->para_pids[i] , 0 ) == 0 ){
+                            count ++;
+                        }
+                    }
+                    sprintf(status , "%-3d/%-3d" , count , p_comm->parallel);
                 } else {
-                    strcpy(status , "已退出");
+                    if ( kill( p_comm->pid , 0 ) == 0 ){
+                        strcpy(status , "运行中  ");
+                    } else {
+                        strcpy(status , "已退出  ");
+                    }
                 }
                 if ( p_comm->type == 'S' ){
                     strcpy(type , "发送");
@@ -1426,6 +1515,8 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                     strcpy(type , "接收");
                 } else if ( p_comm->type == 'J' ){
                     strcpy(type , "外卡");
+                } else if ( p_comm->type == 'X' ){
+                    strcpy(type , "短链");
                 }
 
                 offset += sprintf(ret+offset , 

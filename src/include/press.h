@@ -12,6 +12,7 @@
 #define RUNNING		    2
 #define FINISHED        3
 #define MAX_PROC_NUM    40
+#define MAX_PARA_NUM    500
 
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2
@@ -34,6 +35,8 @@ typedef struct comm_proc{
 	int 	qidSend;	    		/*qid */
 	int 	qidRead;				/*qid */
     int     persist;                /*wheathe writes to file*/
+    int     parallel;               /*短链接并发数*/
+    pid_t   para_pids[MAX_PARA_NUM];/*短链接并发进程*/
 	struct 	comm_proc *next;		/*next process*/
 }comm_proc_st;
 
