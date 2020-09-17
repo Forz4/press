@@ -174,12 +174,13 @@ void conn_config_free(conn_config_st *p_conn_conf)
 int conn_start(conn_config_st *p_conn_conf)
 {
     int ret = 0;
-    log_write(SYSLOG , LOGDBG , "开始加载 conn.cfg ");
+    log_write(SYSLOG , LOGINF , "开始启动通讯模块");
     ret = conn_config_load(p_conn_conf);
     if (ret < 0){
         log_write(SYSLOG , LOGERR , "无法加载 conn.cfg");
         exit(1);
     }
+    log_write(SYSLOG , LOGDBG , "配置文件加载完成");
 
     comm_proc_st *cur = p_conn_conf->process_head;
 
@@ -217,9 +218,9 @@ int conn_start(conn_config_st *p_conn_conf)
             for ( i = 0 ; i < cur->parallel ; i ++ ){
                 ret = conn_sender_start(cur);
                 if ( ret < 0 ){
-                    log_write(SYSLOG , LOGERR , "短链接通讯发送进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                    log_write(SYSLOG , LOGERR , "短链接通讯进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
                 } else {
-                    log_write(SYSLOG , LOGINF , "短链接通讯发送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                    log_write(SYSLOG , LOGINF , "短链接通讯送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                     cur->para_pids[i] = ret;
                 }
             }
@@ -241,6 +242,8 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     } else if ( pid > 0 ){
         return pid;
     }
+
+    log_write(CONLOG , LOGINF , "长链接接收进程启动 , PORT[%d]" , p_receiver->port);
     signal( SIGTERM , conn_receiver_signal_handler);
 
     /* 服务端套接字 */
@@ -267,34 +270,37 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
-        log_write(SYSLOG , LOGERR , "接收进程绑定端口失败 , PORT[%d]" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "长链接接收进程[%d] bind 失败" , p_receiver->port);
         exit(1);
     }
+    log_write(CONLOG , LOGDBG , "长链接接收进程[%d] bind 成功" , p_receiver->port);
 
     /* 启动监听 */
     if(listen(server_sockfd , 1) == -1){
-        log_write(SYSLOG , LOGERR , "接收进程监听失败 , PORT[%d]" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "长链接接收进程[%d]监听失败" , p_receiver->port);
         exit(1);
     }
+    log_write(CONLOG , LOGDBG , "长链接接收进程[%d]监听成功" , p_receiver->port);
 
     /* 接受远端连接 */
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
-        log_write(SYSLOG , LOGERR , "接收进程accept失败 , PORT[%d]" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "长链接接收进程[%d] accept 失败" , p_receiver->port);
         exit(1);
     }
+    log_write(CONLOG , LOGERR , "长链接接收进程[%d] accept 成功" , p_receiver->port);
 
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "调用shmat失败, id[%d]" , g_mon_shmid);
+        log_write(CONLOG , LOGERR , "调用shmat失败, id[%d]" , g_mon_shmid);
         return -1;
     }
 
-    log_write(SYSLOG , LOGINF , "通讯接收进程连接成功");
     while(1){
         memset(buffer , 0x00 , sizeof(buffer));
         memset(&msgs , 0x00 , sizeof(msg_st));
 
+        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]开始recv",p_receiver->port);
         /*read length of transaction*/
         recvlen = recv(sock_recv , buffer , 4 , 0);
         if (recvlen < 0){
@@ -313,10 +319,13 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                 nLeft -= nRead;
             }
         }
+        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]收到报文,textlen[%d]",p_receiver->port,textlen);
 
         sem_lock(g_mon_semid);
         g_mon_stat->recv_num ++;
         sem_unlock(g_mon_semid);
+
+        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]更新接收统计数字完成",p_receiver->port);
 
         if ( p_receiver->persist == 1 ){
             nTranlen = get_length(buffer);
@@ -331,7 +340,6 @@ int conn_receiver_start(comm_proc_st *p_receiver)
             if (ret < 0){
                 log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_receiver->qidSend);
             }
-
         }
     }
     close(sock_recv);
@@ -342,6 +350,7 @@ int conn_receiver_start(comm_proc_st *p_receiver)
  * */
 void conn_receiver_signal_handler(int no)
 {
+    log_write(CONLOG , LOGDBG , "长链接接收进程进入信号处理函数退出");
     close(sock_recv);
     exit(0);
 }
@@ -358,6 +367,7 @@ int conn_sender_start(comm_proc_st *p_sender)
         return pid;
     }
 
+    log_write(CONLOG , LOGINF , "通讯发送进程[%c:%s:%d]启动" ,p_sender->type ,  p_sender->ip , p_sender->port);
     signal( SIGTERM , conn_sender_signal_handler);
 
     struct sockaddr_in servaddr;
@@ -403,25 +413,30 @@ int conn_sender_start(comm_proc_st *p_sender)
                 break;
             }
         }
+        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] connect 成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
 
         if (HEART_INTERVAL > 0){
             sigsetjmp(jmpbuf , 1);
             signal(SIGALRM , send_idle);
             alarm(HEART_INTERVAL);
         }
+
+        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] 开始msgrcv" ,p_sender->type ,  p_sender->ip , p_sender->port);
+
         ret = msgrcv(    (key_t)p_sender->qidRead , \
                         &msgs , \
                         sizeof(msg_st) - sizeof(long) , \
                         0, \
                         0 );
         if ( ret < 0 ){
-            log_write(SYSLOG , LOGERR , "通讯发送进程调用msgrcv失败,ret[%d],msgid[%d]",ret,p_sender->qidRead);
+            log_write(CONLOG , LOGERR , "通讯发送进程调用msgrcv失败,ret[%d],msgid[%d]",ret,p_sender->qidRead);
             close(sock_send);
             exit(1);
         }
         if (HEART_INTERVAL > 0){
             alarm(0);
         }
+        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d]从队列读到报文,len[%d]" ,p_sender->type ,  p_sender->ip , p_sender->port , msgs.length);
 
         len = msgs.length;
         nTotal = 0;
@@ -433,17 +448,20 @@ int conn_sender_start(comm_proc_st *p_sender)
                 break;
             }
             else if (nSent < 0){
-                log_write(SYSLOG , LOGERR , "通讯发送进程调用send失败,nSent[%d]" , nSent);
+                log_write(CONLOG , LOGERR , "通讯发送进程调用send失败,nSent[%d],errno[%d]" , nSent , errno);
                 close(sock_send);
                 exit(0);
             }
             nTotal += nSent;
             nLeft -= nSent;
         }
+        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] send 成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
         
         sem_lock(g_mon_semid);
         g_mon_stat->send_num ++;
         sem_unlock(g_mon_semid);
+
+        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] 更新统计发送笔数成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
 
         if ( p_sender->persist == 1 ){
             gettimeofday(&ts , NULL);
@@ -458,6 +476,7 @@ int conn_sender_start(comm_proc_st *p_sender)
         
 /*=========== 短链接的逻辑 ==============*/
         if ( p_sender->type == 'X' ){
+            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] 开始recv" ,p_sender->type ,  p_sender->ip , p_sender->port);
             recvlen = recv(sock_send , buffer , 4 , 0);
             if (recvlen < 0){
                 break;
@@ -475,10 +494,13 @@ int conn_sender_start(comm_proc_st *p_sender)
                     nLeft -= nRead;
                 }
             }
+            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] recv成功,textlen[%d]" ,p_sender->type ,  p_sender->ip , p_sender->port , textlen);
 
             sem_lock(g_mon_semid);
             g_mon_stat->recv_num ++;
             sem_unlock(g_mon_semid);
+
+            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d]更新统计数字成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
 
             if ( p_sender->persist == 1 ){
                 nTranlen = get_length(buffer);
@@ -523,6 +545,8 @@ int conn_jips_start(comm_proc_st *p_jips)
         return pid;
     }
 
+    log_write(CONLOG , LOGINF , "外卡通讯进程[%d]启动" , p_jips->port);
+
     /* 服务端套接字 */
     int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
     struct sockaddr_in server_sockaddr;
@@ -549,27 +573,31 @@ int conn_jips_start(comm_proc_st *p_jips)
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
-        log_write(SYSLOG , LOGERR , "外卡通讯进程 bind 失败 , PORT[%d]" , p_jips->port);
+        log_write(CONLOG , LOGERR , "外卡通讯进程[%d] bind 失败" , p_jips->port);
         exit(1);
     }
+    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] bind 成功" , p_jips->port);
 
     if(listen(server_sockfd , 1) == -1){
-        log_write(SYSLOG , LOGERR , "外卡通讯进程 listen 失败 , PORT[%d]" , p_jips->port);
+        log_write(CONLOG , LOGERR , "外卡通讯进程[%d] listen 失败" , p_jips->port);
         exit(1);
     }
+    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] listen 成功" , p_jips->port);
 
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
-        log_write(SYSLOG , LOGERR , "外卡通讯进程 accept 失败, PORT[%d]" , p_jips->port);
+        log_write(SYSLOG , LOGERR , "外卡通讯进程[%d] accept 失败" , p_jips->port);
         exit(1);
     }
+    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] accept 成功" , p_jips->port);
 
     /* start receiving process */
     pidRecv = fork();
     if ( pidRecv == 0 ){
+        log_write(CONLOG , LOGINF , "外卡通讯进程[%d] 接收子进程启动" , p_jips->port);
         g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
         if ( g_mon_stat == NULL ){
-            log_write(SYSLOG , LOGERR , "外卡通讯进程调用shmat失败 , shmid[%d]" , g_mon_shmid);
+            log_write(CONLOG , LOGERR , "外卡通讯进程调用shmat失败 , shmid[%d]" , g_mon_shmid);
             return -1;
         }
 
@@ -577,6 +605,7 @@ int conn_jips_start(comm_proc_st *p_jips)
             memset(buffer , 0x00 , sizeof(buffer));
             memset(&msgs , 0x00 , sizeof(msg_st));
 
+            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]接收子进程开始recv" , p_jips->port);
             recvlen = recv(sock_recv , buffer , 4 , 0);
             if (recvlen < 0){
                 break;
@@ -594,6 +623,8 @@ int conn_jips_start(comm_proc_st *p_jips)
                     nLeft -= nRead;
                 }
             }
+
+            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]接收子进程收到报文,textlen[%d]" , p_jips->port , textlen);
             
             sem_lock(g_mon_semid);
             g_mon_stat->recv_num ++;
@@ -621,7 +652,7 @@ int conn_jips_start(comm_proc_st *p_jips)
     /* start jips sender process */
     pidSend = fork();
     if ( pidSend == 0 ){
-
+        log_write(CONLOG , LOGINF , "外卡通讯进程[%d]发送子进程启动" , p_jips->port);
         while(1){
             if (HEART_INTERVAL > 0){
                 sigsetjmp(jmpbuf , 1);
@@ -639,6 +670,8 @@ int conn_jips_start(comm_proc_st *p_jips)
             
             len = get_length(msgs.text);
 
+            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]发送子进程读取到报文,len[%d]" , p_jips->port , len);
+
             nTotal = 4;
             nSent = 0;
             nLeft = len;
@@ -648,13 +681,14 @@ int conn_jips_start(comm_proc_st *p_jips)
                     break;
                 }
                 else if (nSent < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用send失败");
+                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用send失败,nSentt[%d],errno[%d]",nSent,errno);
                     close(sock_recv);
                     exit(0);
                 }
                 nTotal += nSent;
                 nLeft -= nSent;
             }
+            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]发送子进程发送报文成功,len[%d]" , p_jips->port , len);
 
             sem_lock(g_mon_semid);
             g_mon_stat->send_num ++;
@@ -678,18 +712,18 @@ int conn_jips_start(comm_proc_st *p_jips)
     /*parent sleep and wait for signal */
     close(sock_recv);
     signal( SIGTERM , conn_jips_signal_handler);
-    log_write(SYSLOG , LOGINF , "外卡通讯发送进程启动成功 , pidSend[%d]" , pidSend);
-    log_write(SYSLOG , LOGINF , "外卡通讯接收进程启动成功 , pidRecv[%d]" , pidRecv);
+    log_write(CONLOG , LOGINF , "外卡通讯发送进程启动成功 , pidSend[%d]" , pidSend);
+    log_write(CONLOG , LOGINF , "外卡通讯接收进程启动成功 , pidRecv[%d]" , pidRecv);
     
     while(1){
         sleep(10);
         if ( kill( pidRecv , 0 ) == 0 && kill( pidSend , 0) == 0 ){
-            log_write(SYSLOG , LOGDBG , "外卡通讯进程工作正常 port[%d], pidRecv[%d] , pidSend[%d]" , p_jips->port , pidRecv , pidSend);
+            log_write(CONLOG , LOGINF , "外卡通讯进程工作正常 port[%d], pidRecv[%d] , pidSend[%d]" , p_jips->port , pidRecv , pidSend);
             continue;
         } else {
             kill( pidRecv , 9);
             kill( pidSend , 9);
-            log_write(SYSLOG , LOGERR , "外卡通讯进程工作异常，强行退出进程pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
+            log_write(CONLOG , LOGERR , "外卡通讯进程工作异常，强行退出进程pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
             exit(-1);
         }
     }
@@ -701,7 +735,7 @@ void conn_jips_signal_handler(int signo)
 {
     kill( pidRecv , SIGTERM);
     kill( pidSend , SIGTERM);
-    log_write(SYSLOG , LOGERR , "外卡通讯进程退出, pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
+    log_write(CONLOG , LOGINF , "外卡通讯进程退出, pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
     exit(0);
 }
 /* 停止通讯模块 */
@@ -747,7 +781,7 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     cat_proc_st *cat_cur = NULL;
     char    value[MAX_CFG_VAL_LEN];
 
-    log_write(SYSLOG , LOGDBG , "开始加载组包进程配置");
+    log_write(SYSLOG , LOGINF , "开始加载组包进程配置");
     p_pack_conf->pit_head = NULL;
     p_pack_conf->cat_head = NULL;
 
@@ -999,7 +1033,7 @@ int pack_send(pack_config_st *p_pack_conf)
 int pack_shut(pack_config_st *p_pack_conf)
 {
     pit_proc_st     *pit_cur = p_pack_conf->pit_head;
-    cat_proc_st        *cat_cur = p_pack_conf->cat_head;
+    cat_proc_st     *cat_cur = p_pack_conf->cat_head;
     stat_st         *l_stat = NULL;
 
     while ( pit_cur != NULL ){
@@ -1053,13 +1087,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         return pid;
     }
 
+    log_write(PCKLOG , LOGINF , "组包进程[%s]启动" , p_pitcher->tplFileName);
     /* relocate share memory */
     g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
     if ( g_stat == NULL ){
         log_write(SYSLOG , LOGERR , "shmat fail");
         return -1;
     }
-    log_write(SYSLOG , LOGDBG , "shmat OK , g_stat = %u" , g_stat);
+    log_write(PCKLOG , LOGDBG , "shmat OK , g_stat = %u" , g_stat);
 
     tpl_st mytpl;
     rule_st *ruleHead = NULL;
@@ -1085,14 +1120,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     /* load template */
     memset(&mytpl , 0x00 , sizeof(mytpl));
     if (get_template(p_pitcher->tpl_fp , &mytpl)){
-        log_write(SYSLOG , LOGERR , "加载模板文件内容失败");
+        log_write(PCKLOG , LOGERR , "加载模板文件内容失败");
         fclose(p_pitcher->tpl_fp);
         exit(-1);
     }
     /* load rules */
     ruleHead = get_rule(p_pitcher->rule_fp);
     if (ruleHead == NULL){
-        log_write(SYSLOG , LOGERR , "加载替换规则文件失败");
+        log_write(PCKLOG , LOGERR , "加载替换规则文件失败");
         fclose(p_pitcher->rule_fp);
         exit(-1);
     }
@@ -1125,7 +1160,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         /* send to out queue */
         ret = msgsnd((key_t)p_pitcher->qid , &msgs , sizeof(msg_st) - sizeof(long) , 0);
         if (ret < 0){
-            log_write(SYSLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
+            log_write(PCKLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
             exit(1);
         }
         /* update share memory*/
@@ -1765,6 +1800,8 @@ int main(int argc , char *argv[])
 
     /* 初始化日志模块 */
     log_init(SYSLOG , "system");
+    log_init(PCKLOG , "packing");
+    log_init(CONLOG , "connection");
 
     /* 检查是否已存在运行的实例 */
     if ( check_deamon() ){
@@ -1799,7 +1836,7 @@ int main(int argc , char *argv[])
         log_write(SYSLOG , LOGERR , "初始化信号量失败");
         goto error_out;
     }
-    log_write(SYSLOG , LOGINF , "初始化信号量成功,g_mon_semid=%d",g_mon_semid);
+    log_write(SYSLOG , LOGINF , "初始化监控区信号量成功,g_mon_semid=%d",g_mon_semid);
 
     /* 初始化命令消息队列 */
     if ( (QID_CMD = get_qid("MSGKEY_CMD")) < 0){
@@ -1834,7 +1871,7 @@ int main(int argc , char *argv[])
         log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_shmid);
         goto error_out;
     }
-    log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid);
+    log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid );
 
     g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
     if ( g_mon_shmid < 0 ){
@@ -1850,7 +1887,7 @@ int main(int argc , char *argv[])
 
     /* 循环处理命令 */
     while (1){
-        log_write(SYSLOG , LOGDBG , "等待命令输入...");
+        log_write(SYSLOG , LOGINF , "守护进程等待命令输入...");
 
         memset(&msgs , 0x00 , sizeof(msgs));
         ret = msgrcv((key_t)(QID_CMD) , &msgs , sizeof(msgs) - sizeof(long) , getpid() , 0);
@@ -1969,5 +2006,6 @@ error_out:
     conn_config_free(p_conn_conf);
     /* 删除pidfile */
     remove("/tmp/press.pid");
+
     return 0;
 }
