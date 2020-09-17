@@ -22,8 +22,10 @@
 #define STAT_PACK       0x10
 #define STAT_MONI       0x100
 
-#define TRAN_TYPE_REQ   35
-#define TRAN_TYPE_RES   36
+#define LONG_SEND       1 
+#define LONG_RECV       2
+#define SHORTCONN       3
+#define JIPSCONN        4 
 
 const char *PRESS_VERSION = "V1.0";
 
@@ -32,8 +34,6 @@ typedef struct comm_proc{
 	pid_t 	pid;					/*process id*/
 	char 	ip[20];					/*ip address*/
 	int 	port;					/*port number*/
-	int 	qidSend;	    		/*qid */
-	int 	qidRead;				/*qid */
     int     persist;                /*wheathe writes to file*/
     int     parallel;               /*短链接并发数*/
     pid_t   para_pids[MAX_PARA_NUM];/*短链接并发进程*/
@@ -60,19 +60,9 @@ typedef struct pit_proc{
 	struct 	pit_proc *next;
 }pit_proc_st;
 
-typedef struct cat_proc{
-	pid_t 	pid;
-	int 	qid;
-    int     type;
-    struct  cat_proc *next;
-}cat_proc_st;
-
 typedef struct pack_config{
 	int 	status;
-	int 	qid_in;
-	int 	qid_out;
 	struct 	pit_proc *pit_head;
-	struct 	cat_proc *cat_head;
 }pack_config_st;
 
 typedef struct REPLACE{
@@ -129,8 +119,7 @@ int     pack_shut(pack_config_st *p_pack_conf);
 void    pack_pit_load(stat_st *l_stat , pit_proc_st *p_pitcher);
 int     pack_pit_start(pit_proc_st *p_pitcher);
 void    cal_time_ns(int tps , struct timespec *ts);
-int     pack_cat_start(cat_proc_st *p_catcher);
-void    pack_cat_signal_handler(int signo);
+int     persist(msg_st msgs);
 int     sem_init();
 void    sem_destroy(int);
 int     sem_lock(int);

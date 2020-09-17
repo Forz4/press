@@ -2,9 +2,9 @@
 
 sigjmp_buf  jmpbuf;             /* 全局跳转结构 */
 int         QID_CMD = 0;        /* 控制台用消息队列ID */
+int         QID_MSG = 0;        /* 报文传输队列 */
 int         HEART_INTERVAL;     /* 心跳时间间隔 */
 char        ENCODING;           /* A代表ascii码，H代表十六进制*/
-int         CATCHER_NUM=0;      /* 持久化进程个数 */
 int         sock_send = 0;      /* 发送套接字 */
 int         sock_recv = 0;      /* 接收套接字 */
 int         pidSend = 0;        /* 外卡模式下的双工发送子进程ID */
@@ -38,18 +38,6 @@ int conn_config_load(conn_config_st *p_conn_conf)
         return -1;
     }
 
-    /* 加载消息队列配置 */
-    if ( (p_conn_conf->qid_out = get_qid("MSGKEY_OUT")) < 0){
-        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_OUT]配置");
-        return -1;
-    }
-    log_write(SYSLOG , LOGDBG , "从配置文件press.cfg读取MSGKEY_OUT,msgid=%d",p_conn_conf->qid_out);
-
-    if ( (p_conn_conf->qid_in = get_qid("MSGKEY_IN")) < 0){
-        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_IN]配置");
-        return -1;
-    }
-    log_write(SYSLOG , LOGDBG , "从配置文件press.cfg读取MSGKEY_IN,msgid=%d",p_conn_conf->qid_in);
 
     if (loadConfig("HEART_INTERVAL" , value , MAX_CFG_VAL_LEN) < 0){
         HEART_INTERVAL = 0;
@@ -93,18 +81,6 @@ int conn_config_load(conn_config_st *p_conn_conf)
             return -1;
         }
         cur->type = buf[0];
-        if ( cur->type == 'S' ){
-            cur->qidRead = p_conn_conf->qid_out;
-            cur->qidSend = p_conn_conf->qid_in;
-        } else if ( cur->type == 'R' ){
-            cur->qidSend = p_conn_conf->qid_in;
-        } else if ( cur->type == 'J' ){
-            cur->qidRead = p_conn_conf->qid_out;
-            cur->qidSend = p_conn_conf->qid_in;
-        } else if ( cur->type == 'X' ){
-            cur->qidRead = p_conn_conf->qid_out;
-            cur->qidSend = p_conn_conf->qid_in;
-        }
 
         if (get_bracket(line , 2 , buf , 100)){
             log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第2域错误");
@@ -330,15 +306,15 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         if ( p_receiver->persist == 1 ){
             nTranlen = get_length(buffer);
             memcpy(msgs.text , buffer , nTranlen + 4);
-
             gettimeofday( &ts , NULL );
             memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
             msgs.flag = 'I';
-            msgs.type = TRAN_TYPE_RES;
+            msgs.type = LONG_RECV;
             msgs.length = nTranlen + 4;
-            ret = msgsnd((key_t)p_receiver->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+
+            ret = persist(msgs);
             if (ret < 0){
-                log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_receiver->qidSend);
+                log_write(SYSLOG , LOGERR , "通讯接收进程调用持久化失败");
             }
         }
     }
@@ -423,13 +399,13 @@ int conn_sender_start(comm_proc_st *p_sender)
 
         log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] 开始msgrcv" ,p_sender->type ,  p_sender->ip , p_sender->port);
 
-        ret = msgrcv(    (key_t)p_sender->qidRead , \
+        ret = msgrcv(    (key_t)QID_MSG , \
                         &msgs , \
                         sizeof(msg_st) - sizeof(long) , \
                         0, \
                         0 );
         if ( ret < 0 ){
-            log_write(CONLOG , LOGERR , "通讯发送进程调用msgrcv失败,ret[%d],msgid[%d]",ret,p_sender->qidRead);
+            log_write(CONLOG , LOGERR , "通讯发送进程调用msgrcv失败,ret[%d],msgid[%d]",ret,QID_MSG);
             close(sock_send);
             exit(1);
         }
@@ -467,10 +443,13 @@ int conn_sender_start(comm_proc_st *p_sender)
             gettimeofday(&ts , NULL);
             memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
             msgs.flag = 'O';
-            msgs.type = TRAN_TYPE_REQ;
-            ret = msgsnd((key_t)p_sender->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+            if ( p_sender->type == 'S' )
+                msgs.type = LONG_SEND;
+            else if ( p_sender->type == 'X' )
+                msgs.type = SHORTCONN;
+            ret = persist(msgs);
             if (ret < 0){
-                log_write(SYSLOG , LOGERR , "通讯发送进程调用msgsnd持久化失败,msgid[%d]" , p_sender->qidSend);
+                log_write(SYSLOG , LOGERR , "通讯发送进程持久化失败");
             }
         }
         
@@ -509,11 +488,11 @@ int conn_sender_start(comm_proc_st *p_sender)
                 gettimeofday( &ts , NULL );
                 memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
                 msgs.flag = 'I';
-                msgs.type = TRAN_TYPE_RES;
+                msgs.type = SHORTCONN;
                 msgs.length = nTranlen + 4;
-                ret = msgsnd((key_t)p_sender->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+                ret = persist(msgs);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "通讯接收进程调用msgsnd持久化失败 , msgid[%d]" , p_sender->qidSend);
+                    log_write(CONLOG , LOGERR , "通讯接收进程持久化失败" );
                 }
 
             }
@@ -639,9 +618,10 @@ int conn_jips_start(comm_proc_st *p_jips)
                 gettimeofday( &ts , NULL );
                 memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
                 msgs.flag = 'I';
-                ret = msgsnd((key_t)p_jips->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+                msgs.type = JIPSCONN;
+                ret = persist(msgs);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用msgsnd持久化失败,ret[%d],msgid[%d]",ret,p_jips->qidSend);
+                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用msgsnd持久化失败");
                 }
             }
         }
@@ -659,7 +639,7 @@ int conn_jips_start(comm_proc_st *p_jips)
                 signal(SIGALRM , send_idle);
                 alarm(HEART_INTERVAL);
             }
-            ret = msgrcv(    (key_t)p_jips->qidRead , \
+            ret = msgrcv(    (key_t)QID_MSG , \
                             &msgs , \
                             sizeof(msg_st) - sizeof(long) , \
                             0, \
@@ -698,9 +678,10 @@ int conn_jips_start(comm_proc_st *p_jips)
                 gettimeofday(&ts , NULL);
                 memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
                 msgs.flag = 'O';
-                ret = msgsnd((key_t)p_jips->qidSend , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+                msgs.type = JIPSCONN;
+                ret = persist(msgs);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用msgsnd持久化失败,ret[%d],msgid[%d]",ret,p_jips->qidSend);
+                    log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
                 }
             }
         }
@@ -778,69 +759,15 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     char     buf[100];
     int     count = 0;
     char     pathname[MAX_PATHNAME_LEN];
-    cat_proc_st *cat_cur = NULL;
-    char    value[MAX_CFG_VAL_LEN];
 
     log_write(SYSLOG , LOGINF , "开始加载组包进程配置");
     p_pack_conf->pit_head = NULL;
-    p_pack_conf->cat_head = NULL;
-
     pit_proc_st    *pit_cur = NULL;
-
     memset(config_fn , 0x00 , sizeof(config_fn));
 
     /* clear previous configs first */
     pack_config_free(p_pack_conf);
     
-    /* load qids*/
-    if ( (p_pack_conf->qid_out = get_qid("MSGKEY_OUT")) < 0){
-        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_OUT]配置");
-        return -1;
-    }
-
-    if ( (p_pack_conf->qid_in = get_qid("MSGKEY_IN")) < 0){
-        log_write(SYSLOG , LOGERR , "press.cfg 中未找到[MSGKEY_IN]配置");
-        return -1;
-    }
-
-    if (loadConfig("CATCHER_NUM" , value , MAX_CFG_VAL_LEN) < 0)
-        CATCHER_NUM = 1;
-    else
-        CATCHER_NUM = atoi(value);
-
-    p_pack_conf->cat_head = NULL;
-    for ( int i = 0 ; i < CATCHER_NUM ; i ++ ){
-        cat_cur= (cat_proc_st *)malloc(sizeof(cat_proc_st));
-        if(cat_cur == NULL){
-            log_write(SYSLOG , LOGERR , "内部错误:malloc for cat_proc_st失败");
-            return -1;
-        }
-        cat_cur->qid = p_pack_conf->qid_in;
-        cat_cur->type = TRAN_TYPE_REQ;
-        if ( p_pack_conf->cat_head != NULL ){
-            cat_cur->next = p_pack_conf->cat_head->next;
-            p_pack_conf->cat_head->next = cat_cur;
-        } else {
-            p_pack_conf->cat_head = cat_cur;
-            cat_cur->next = NULL;
-        }
-
-        cat_cur= (cat_proc_st *)malloc(sizeof(cat_proc_st));
-        if(cat_cur == NULL){
-            log_write(SYSLOG , LOGERR , "内部错误:malloc for cat_proc_st失败");
-            return -1;
-        }
-        cat_cur->qid = p_pack_conf->qid_in;
-        cat_cur->type = TRAN_TYPE_RES;
-        if ( p_pack_conf->cat_head != NULL ){
-            cat_cur->next = p_pack_conf->cat_head->next;
-            p_pack_conf->cat_head->next = cat_cur;
-        } else {
-            p_pack_conf->cat_head = cat_cur;
-            cat_cur->next = NULL;
-        }
-    }
-
     /* load pitcher processes */
     memset(pathname , 0x00 , sizeof(pathname));
     sprintf(pathname , "%s/cfg/%s" , getenv("PRESS_HOME") , filename);
@@ -920,8 +847,6 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         log_write(SYSLOG , LOGDBG , "读取第4域发送时间time[%d]" ,pit_cur->time );
 
         /* get qid */
-        pit_cur->qid = p_pack_conf->qid_out;
-
         count ++;
         pit_cur->next = p_pack_conf->pit_head;
         p_pack_conf->pit_head = pit_cur;
@@ -945,8 +870,6 @@ int pack_config_free(pack_config_st *p_pack_conf)
     pack_config_st *cur = p_pack_conf;
     pit_proc_st *pit_cur = NULL;
     pit_proc_st *pit_del = NULL;
-    cat_proc_st *cat_cur = NULL;
-    cat_proc_st *cat_del = NULL;
     if ( cur == NULL )
     {
         return 0;
@@ -959,12 +882,6 @@ int pack_config_free(pack_config_st *p_pack_conf)
         fclose(pit_del->tpl_fp);
         fclose(pit_del->rule_fp);
         free(pit_del);
-    }
-    cat_cur = cur->cat_head;
-    while ( cat_cur != NULL ){
-        cat_del = cat_cur;
-        cat_cur = cat_cur->next;
-        free(cat_del);
     }
 
     log_write(SYSLOG , LOGDBG ,  "清理组包配置完成");
@@ -1012,13 +929,6 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
 int pack_send(pack_config_st *p_pack_conf)
 {
     pit_proc_st *cur = p_pack_conf->pit_head;
-    cat_proc_st *cat_cur = p_pack_conf->cat_head;
-    /* start catcher */
-    while (cat_cur != NULL){
-        cat_cur->pid  = pack_cat_start(cat_cur);
-        log_write(SYSLOG , LOGINF , "持久化进程启动,PID[%d]",cat_cur->pid);
-        cat_cur = cat_cur->next;
-    }
     /* start pitchers */
     while ( cur != NULL ) {
         cur->pid = pack_pit_start(cur);
@@ -1033,7 +943,6 @@ int pack_send(pack_config_st *p_pack_conf)
 int pack_shut(pack_config_st *p_pack_conf)
 {
     pit_proc_st     *pit_cur = p_pack_conf->pit_head;
-    cat_proc_st     *cat_cur = p_pack_conf->cat_head;
     stat_st         *l_stat = NULL;
 
     while ( pit_cur != NULL ){
@@ -1044,14 +953,6 @@ int pack_shut(pack_config_st *p_pack_conf)
             log_write(SYSLOG , LOGINF , "停止组包进程,pid[%d]" , pit_cur->pid);
         }
         pit_cur = pit_cur->next;
-    }
-
-    while ( cat_cur != NULL ){
-        if( cat_cur->pid){
-            kill(cat_cur->pid , SIGTERM);
-            log_write(SYSLOG , LOGINF , "停止持久化进程,pid[%d]" , cat_cur->pid);
-        }
-        cat_cur = cat_cur->next;
     }
 
     p_pack_conf->status = FINISHED;
@@ -1158,7 +1059,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             currule = currule->next;
         }
         /* send to out queue */
-        ret = msgsnd((key_t)p_pitcher->qid , &msgs , sizeof(msg_st) - sizeof(long) , 0);
+        ret = msgsnd((key_t)QID_MSG , &msgs , sizeof(msg_st) - sizeof(long) , 0);
         if (ret < 0){
             log_write(PCKLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
             exit(1);
@@ -1182,95 +1083,66 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     exit(0);
 }
 
-int pack_cat_start(cat_proc_st *p_catcher)
+int persist(msg_st msgs)
 {
-    int pid;
-    pid = fork();
-    if ( pid < 0 ){
-        return -1;
-    } else if ( pid > 0 ){
-        return pid;
-    }
-    
-    signal(SIGTERM, pack_cat_signal_handler);
-    signal(SIGALRM, pack_cat_signal_handler);
-
     FILE *fp = NULL;
-    msg_st msgs;
-    int ret;
     char pathname[MAX_PATHNAME_LEN];
 
     memset(pathname , 0x00 , sizeof(pathname));
-    if ( p_catcher->type == TRAN_TYPE_REQ )
-        sprintf(pathname , "%s/data/result/req.%d" , getenv("PRESS_HOME") , getpid());
-    else if ( p_catcher->type == TRAN_TYPE_RES )
-        sprintf(pathname , "%s/data/result/res.%d" , getenv("PRESS_HOME") , getpid());
-    fp = fopen(pathname , "w+");
+    if ( msgs.type == LONG_SEND )
+        sprintf(pathname , "%s/data/result/longsend_%d" , getenv("PRESS_HOME") , getpid());
+    else if ( msgs.type == LONG_RECV )
+        sprintf(pathname , "%s/data/result/longrecv_%d" , getenv("PRESS_HOME") , getpid());
+    else if ( msgs.type == SHORTCONN )
+        sprintf(pathname , "%s/data/result/shorconn_%d" , getenv("PRESS_HOME") , getpid());
+    else if ( msgs.type == JIPSCONN )
+        sprintf(pathname , "%s/data/result/jipsconn_%d" , getenv("PRESS_HOME") , getpid());
+    fp = fopen(pathname , "a+");
     if (fp == NULL){
-        log_write(SYSLOG , LOGERR , "内部错误:无法打开持久化结果文件[%s]",pathname);
-        exit(1);
+        log_write(CONLOG , LOGERR , "内部错误:无法打开持久化结果文件[%s]",pathname);
+        return -1;
     }
 
-    while (1){
-        alarm(20);
-        ret = msgrcv(    (key_t)p_catcher->qid , \
-                        &msgs , \
-                        sizeof(msg_st) - sizeof(long) , \
-                        p_catcher->type, \
-                        0 );
-        if (ret < 0){
-            log_write(SYSLOG , LOGERR , "内部错误:持久化进程调用msgrcv失败,ret[%d],errno[%d]",ret,errno);
-            exit(1);
-        }
-        alarm(0);
+    fprintf( fp , "%ld.%06d " , msgs.ts.tv_sec , msgs.ts.tv_usec);
 
-        fprintf( fp , "%ld.%06d " , msgs.ts.tv_sec , msgs.ts.tv_usec);
-
-        int len = msgs.length;
-        if ( ENCODING == 'H' ){
-            fprintf( fp , "HEX PRINT START\n");
-            int i = 0;
-            int j = 0;
-            char ch = ' ';
-            for ( i = 0 ; i <= len/16 ; i ++){
-                fprintf( fp , "%06d " , i);
-                for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
-                    ch = msgs.text[j+i*16];
-                    fprintf( fp , "%c%c " , \
-                            ch/16 >= 10 ? ch/16-10+'A': ch/16+'0',\
-                            ch%16 >= 10 ? ch%16-10+'A': ch%16+'0');
-                }
-                while ( j++ < 16 ){
-                    fprintf( fp , "   ");
-                }
-                fprintf( fp , "|");
-                for ( j = 0 ; j+i*16 < len && j < 16 ; j ++ ){
-                    int pos = j+i*16;
-                    if ( (msgs.text[pos] >= 'a' && msgs.text[pos] <= 'z') ||
-                         (msgs.text[pos] >= 'A' && msgs.text[pos] <= 'Z') || 
-                         (msgs.text[pos] >= '0' && msgs.text[pos] <= '9') ){
-                        fprintf( fp , "%c",msgs.text[pos]);
-                    } else {
-                        fprintf( fp , ".");
-                    }
-                }
-                fprintf( fp , "\n");
+    int len = msgs.length;
+    if ( ENCODING == 'H' ){
+        fprintf( fp , "HEX PRINT START\n");
+        int i = 0;
+        int j = 0;
+        char ch = ' ';
+        for ( i = 0 ; i <= len/16 ; i ++){
+            fprintf( fp , "%06d " , i);
+            for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
+                ch = msgs.text[j+i*16];
+                fprintf( fp , "%c%c " , \
+                        ch/16 >= 10 ? ch/16-10+'A': ch/16+'0',\
+                        ch%16 >= 10 ? ch%16-10+'A': ch%16+'0');
             }
-            fprintf( fp , "================HEX PRINT END\n");
-        } else {
-            fwrite(msgs.text , 1 , len , fp);
-            fwrite("\n" , 1, 1 , fp);
+            while ( j++ < 16 ){
+                fprintf( fp , "   ");
+            }
+            fprintf( fp , "|");
+            for ( j = 0 ; j+i*16 < len && j < 16 ; j ++ ){
+                int pos = j+i*16;
+                if ( (msgs.text[pos] >= 'a' && msgs.text[pos] <= 'z') ||
+                     (msgs.text[pos] >= 'A' && msgs.text[pos] <= 'Z') || 
+                     (msgs.text[pos] >= '0' && msgs.text[pos] <= '9') ){
+                    fprintf( fp , "%c",msgs.text[pos]);
+                } else {
+                    fprintf( fp , ".");
+                }
+            }
+            fprintf( fp , "\n");
         }
-        fflush(fp);
+        fprintf( fp , "================HEX PRINT END\n");
+    } else {
+        fwrite(msgs.text , 1 , len , fp);
+        fwrite("\n" , 1, 1 , fp);
     }
-
     fclose(fp);
-    exit(0);
-}
-void pack_cat_signal_handler(int signo)
-{
-    log_write(SYSLOG , LOGDBG , "持久化进程退出");
-    exit(0);
+    log_write(CONLOG , LOGDBG , "持久化成功");
+    return 0;
 }
 /*
  * 初始化信号量
@@ -1844,6 +1716,13 @@ int main(int argc , char *argv[])
         goto error_out;
     }
     log_write(SYSLOG , LOGINF , "初始化命令消息队列成功,QID_CMD=%d" , QID_CMD);
+
+    /* 初始化报文消息队列 */
+    if ( (QID_MSG = get_qid("MSGKEY_MSG")) < 0){
+        log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_MSG]");
+        goto error_out;
+    }
+    log_write(SYSLOG , LOGINF , "初始化命令消息队列成功,QID_MSG=%d" , QID_MSG);
 
     /* 初始化全局结构体 */
     p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
