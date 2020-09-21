@@ -22,9 +22,11 @@ static void print_usage()
 	printf("           tps +100%% 0\t\t将序号为0的组包进程tps增加100%%\n");
 	printf("           tps 10\t\t将所有的组包进程tps设置为10\n");
 	printf("           tps 10 1\t\t将序号为1的组包进程tps设置为10\n");
-	printf("<tps>     设置发送时间,命令格式:\n");
+	printf("<time>    设置发送时间,命令格式:\n");
 	printf("          <time [+-]调整值[%%] [序号]>\n");
 	printf("          举例参考tps命令\n");
+	printf("<para>    设置短链接并发数\n");
+	printf("          <para parallel_num>\n");
 	printf("<exit>    退出客户端\n");
 	printf("<help>    打印帮助\n");
 	return;
@@ -118,6 +120,7 @@ int main(int argc , char *argv[])
                     memcmp(inputLine , "moni" , 4) && \
                     memcmp(inputLine , "tps"  , 3) && \
                     memcmp(inputLine , "time" , 4) && \
+                    memcmp(inputLine , "para" , 4) && \
                     memcmp(inputLine , "shut" , 4) ) {
             print_usage();
             continue;

@@ -621,7 +621,7 @@ int conn_jips_start(comm_proc_st *p_jips)
                 msgs.type = JIPSCONN;
                 ret = persist(msgs);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用msgsnd持久化失败");
+                    log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
                 }
             }
         }
@@ -1025,6 +1025,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         fclose(p_pitcher->tpl_fp);
         exit(-1);
     }
+    log_write(PCKLOG , LOGDBG , "模板文件加载完毕");
     /* load rules */
     ruleHead = get_rule(p_pitcher->rule_fp);
     if (ruleHead == NULL){
@@ -1032,11 +1033,13 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         fclose(p_pitcher->rule_fp);
         exit(-1);
     }
+    log_write(PCKLOG , LOGDBG , "替换规则文件加载完毕");
 
     msgs.type = 1;
     msgs.length = mytpl.len + 4;
     gettimeofday(&tv_begin,NULL);
     while( l_stat->left_num > 0 ){
+        log_write(PCKLOG , LOGDBG , "组包开始");
         gettimeofday(&tv_start,NULL);
         memset(msgs.text , 0x00 , sizeof(msgs.text));
         memcpy(msgs.text , mytpl.text , mytpl.len + 4);
@@ -1058,12 +1061,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
             currule = currule->next;
         }
+        log_write(PCKLOG , LOGDBG , "组包完成,准备发送至报文队列");
         /* send to out queue */
         ret = msgsnd((key_t)QID_MSG , &msgs , sizeof(msg_st) - sizeof(long) , 0);
         if (ret < 0){
             log_write(PCKLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
             exit(1);
         }
+        log_write(PCKLOG , LOGDBG , "报文发送完成");
         /* update share memory*/
         gettimeofday(&tv_now,NULL);
         timersub(&tv_now , &tv_begin , &tv_interval);
@@ -1610,6 +1615,51 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     return ret;
 }
 
+char *adjust_para( char *msg , conn_config_st *p_conn_config)
+{
+    int new_para = 0;
+    comm_proc_st *shortconn = p_conn_config->process_head;
+    int i = 0;
+    int offset = 0;
+    char *ret = (char *)malloc(MAX_MSG_LEN);
+    int pid = 0;
+
+    while ( msg[i] != ' ' ){
+        i ++;
+    }
+    i++;
+    while ( msg[i] >= '0' && msg[i] <= '9' ){
+        new_para *= 10;
+        new_para += msg[i] - '0';
+        i ++;
+    }
+    
+    if ( new_para == shortconn->parallel ){
+        offset = sprintf( ret+offset , "输入短链接并发数与当前并发数相同");
+    } else if ( new_para > shortconn->parallel ){
+        for ( i = shortconn->parallel ; i < new_para ; i ++ ){
+            pid = conn_sender_start(shortconn);
+            if ( pid < 0 ) {
+                log_write(SYSLOG , LOGERR , "短链接通讯进程启动失败 , IP[%s] , PORT[%d]",shortconn->ip , shortconn->port);
+            } else {
+                log_write(SYSLOG , LOGINF , "短链接通讯送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",shortconn->ip , shortconn->port , ret);
+                shortconn->para_pids[i] = pid;
+            }
+        }
+        offset = sprintf( ret+offset , "调整短链接通讯进程数为%d",new_para);
+        shortconn->parallel = new_para;
+    } else if ( new_para < shortconn->parallel ){
+        for ( i = shortconn->parallel-1 ; i >= new_para ; i -- ){
+            kill( shortconn->para_pids[i] , 9 );
+        }
+        offset = sprintf( ret+offset , "调整短链接通讯进程数为%d",new_para);
+        shortconn->parallel = new_para;
+    } else if ( new_para <= 0 ){
+        offset = sprintf( ret+offset , "输入短链接并发数不合法");
+    }
+    return ret;
+}
+
 void status_op(int flag , int id , int adjustment , int percent , int direc , int *before , int *after)
 {
     stat_st *l_stat = g_stat + id;
@@ -1722,7 +1772,7 @@ int main(int argc , char *argv[])
         log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_MSG]");
         goto error_out;
     }
-    log_write(SYSLOG , LOGINF , "初始化命令消息队列成功,QID_MSG=%d" , QID_MSG);
+    log_write(SYSLOG , LOGINF , "初始化报文消息队列成功,QID_MSG=%d" , QID_MSG);
 
     /* 初始化全局结构体 */
     p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
@@ -1794,11 +1844,13 @@ int main(int argc , char *argv[])
             conn_stop(p_conn_conf);
             reply("[stop]执行成功,通讯进程已停止");
         } else if ( strncmp(msgs.text , "send" , 4) == 0 ) {
+            /*
             if ( p_conn_conf->status != RUNNING ) {
                 log_write(SYSLOG , LOGINF ,"[send]执行失败,通讯模块未启动");
                 reply("[send]执行失败,输入[init]启动通讯模块");
                 continue;
             }
+            */
             if ( p_pack_conf->status != LOADED ){
                 log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
                 reply("[send]执行失败,输入[load]加载组包进程配置");
@@ -1852,7 +1904,16 @@ int main(int argc , char *argv[])
             retmsg = adjust_status( 2 , msgs.text , p_pack_conf);
             reply(retmsg);
             free(retmsg);
-        } 
+        } else if ( strncmp( msgs.text , "para" , 4) == 0 ){
+            if ( p_conn_conf->status != RUNNING ){
+                log_write(SYSLOG , LOGINF ,"[para]执行失败,组包进程未启动");
+                reply("[para]执行失败,组包进程未启动");
+                continue;
+            }
+            retmsg = adjust_para( msgs.text , p_conn_conf);
+            reply(retmsg);
+            free(retmsg);
+        }
     }
 
     /* 退出清理 */
@@ -1862,6 +1923,10 @@ error_out:
     /* 删除命令消息队列key */
     if ( msgctl((key_t)QID_CMD , IPC_RMID , NULL) ){
         log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_CMD);
+    }
+    /* 删除报文消息队列key */
+    if ( msgctl((key_t)QID_MSG , IPC_RMID , NULL) ){
+        log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_MSG);
     }
     /* 卸载、删除共享内存key */
     shmdt((void *)g_stat);
