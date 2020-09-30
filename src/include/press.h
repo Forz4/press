@@ -119,7 +119,7 @@ int     pack_shut(pack_config_st *p_pack_conf);
 void    pack_pit_load(stat_st *l_stat , pit_proc_st *p_pitcher);
 int     pack_pit_start(pit_proc_st *p_pitcher);
 void    cal_time_ns(int tps , struct timespec *ts);
-int     persist(msg_st msgs);
+int     persist(char *text , int len , char type , struct timeval ts);
 int     sem_init();
 void    sem_destroy(int);
 int     sem_lock(int);

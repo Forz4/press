@@ -264,7 +264,7 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         log_write(CONLOG , LOGERR , "长链接接收进程[%d] accept 失败" , p_receiver->port);
         exit(1);
     }
-    log_write(CONLOG , LOGERR , "长链接接收进程[%d] accept 成功" , p_receiver->port);
+    log_write(CONLOG , LOGDBG , "长链接接收进程[%d] accept 成功" , p_receiver->port);
 
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
@@ -305,16 +305,15 @@ int conn_receiver_start(comm_proc_st *p_receiver)
 
         if ( p_receiver->persist == 1 ){
             nTranlen = get_length(buffer);
-            memcpy(msgs.text , buffer , nTranlen + 4);
-            gettimeofday( &ts , NULL );
-            memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
-            msgs.flag = 'I';
-            msgs.type = LONG_RECV;
-            msgs.length = nTranlen + 4;
-
-            ret = persist(msgs);
-            if (ret < 0){
-                log_write(SYSLOG , LOGERR , "通讯接收进程调用持久化失败");
+            if ( nTranlen < 0 ){
+                log_write(CONLOG , LOGERR , "长链接接收进程获取响应报文长度失败");
+            } else {
+                memcpy(msgs.text , buffer , nTranlen + 4);
+                gettimeofday( &ts , NULL );
+                ret = persist( buffer , nTranlen + 4 , LONG_RECV , ts);
+                if (ret < 0){
+                    log_write(CONLOG , LOGERR , "通讯接收进程调用持久化失败");
+                }
             }
         }
     }
@@ -441,13 +440,11 @@ int conn_sender_start(comm_proc_st *p_sender)
 
         if ( p_sender->persist == 1 ){
             gettimeofday(&ts , NULL);
-            memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
-            msgs.flag = 'O';
             if ( p_sender->type == 'S' )
                 msgs.type = LONG_SEND;
             else if ( p_sender->type == 'X' )
                 msgs.type = SHORTCONN;
-            ret = persist(msgs);
+            ret = persist(msgs.text , msgs.length , msgs.type , ts);
             if (ret < 0){
                 log_write(SYSLOG , LOGERR , "通讯发送进程持久化失败");
             }
@@ -483,18 +480,15 @@ int conn_sender_start(comm_proc_st *p_sender)
 
             if ( p_sender->persist == 1 ){
                 nTranlen = get_length(buffer);
-                memcpy(msgs.text , buffer , nTranlen + 4);
-
-                gettimeofday( &ts , NULL );
-                memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
-                msgs.flag = 'I';
-                msgs.type = SHORTCONN;
-                msgs.length = nTranlen + 4;
-                ret = persist(msgs);
-                if (ret < 0){
-                    log_write(CONLOG , LOGERR , "通讯接收进程持久化失败" );
+                if ( nTranlen < 0 ){
+                    log_write(CONLOG , LOGERR , "短链接接收进程获取响应报文长度失败" );
+                } else {
+                    gettimeofday( &ts , NULL );
+                    ret = persist(buffer , nTranlen + 4 , SHORTCONN , ts);
+                    if (ret < 0){
+                        log_write(CONLOG , LOGERR , "通讯接收进程持久化失败" );
+                    }
                 }
-
             }
             close( sock_send );
         }
@@ -616,10 +610,7 @@ int conn_jips_start(comm_proc_st *p_jips)
                 memcpy( msgs.text , lenAscii , 4);
 
                 gettimeofday( &ts , NULL );
-                memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
-                msgs.flag = 'I';
-                msgs.type = JIPSCONN;
-                ret = persist(msgs);
+                ret = persist( msgs.text , textlen + 4 , JIPSCONN , ts);
                 if (ret < 0){
                     log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
                 }
@@ -676,10 +667,7 @@ int conn_jips_start(comm_proc_st *p_jips)
 
             if ( p_jips->persist == 1 ){
                 gettimeofday(&ts , NULL);
-                memcpy( &(msgs.ts) , &ts , sizeof(struct timeval));
-                msgs.flag = 'O';
-                msgs.type = JIPSCONN;
-                ret = persist(msgs);
+                ret = persist(msgs.text , msgs.length+4 , JIPSCONN , ts);
                 if (ret < 0){
                     log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
                 }
@@ -1088,19 +1076,19 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     exit(0);
 }
 
-int persist(msg_st msgs)
+int persist(char *text , int len , char type , struct timeval ts)
 {
     FILE *fp = NULL;
     char pathname[MAX_PATHNAME_LEN];
 
     memset(pathname , 0x00 , sizeof(pathname));
-    if ( msgs.type == LONG_SEND )
+    if ( type == LONG_SEND )
         sprintf(pathname , "%s/data/result/longsend_%d" , getenv("PRESS_HOME") , getpid());
-    else if ( msgs.type == LONG_RECV )
+    else if ( type == LONG_RECV )
         sprintf(pathname , "%s/data/result/longrecv_%d" , getenv("PRESS_HOME") , getpid());
-    else if ( msgs.type == SHORTCONN )
+    else if ( type == SHORTCONN )
         sprintf(pathname , "%s/data/result/shorconn_%d" , getenv("PRESS_HOME") , getpid());
-    else if ( msgs.type == JIPSCONN )
+    else if ( type == JIPSCONN )
         sprintf(pathname , "%s/data/result/jipsconn_%d" , getenv("PRESS_HOME") , getpid());
     fp = fopen(pathname , "a+");
     if (fp == NULL){
@@ -1108,9 +1096,8 @@ int persist(msg_st msgs)
         return -1;
     }
 
-    fprintf( fp , "%ld.%06d " , msgs.ts.tv_sec , msgs.ts.tv_usec);
+    fprintf( fp , "%ld.%06d " , ts.tv_sec , ts.tv_usec);
 
-    int len = msgs.length;
     if ( ENCODING == 'H' ){
         fprintf( fp , "HEX PRINT START\n");
         int i = 0;
@@ -1119,7 +1106,7 @@ int persist(msg_st msgs)
         for ( i = 0 ; i <= len/16 ; i ++){
             fprintf( fp , "%06d " , i);
             for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
-                ch = msgs.text[j+i*16];
+                ch = text[j+i*16];
                 fprintf( fp , "%c%c " , \
                         ch/16 >= 10 ? ch/16-10+'A': ch/16+'0',\
                         ch%16 >= 10 ? ch%16-10+'A': ch%16+'0');
@@ -1130,10 +1117,10 @@ int persist(msg_st msgs)
             fprintf( fp , "|");
             for ( j = 0 ; j+i*16 < len && j < 16 ; j ++ ){
                 int pos = j+i*16;
-                if ( (msgs.text[pos] >= 'a' && msgs.text[pos] <= 'z') ||
-                     (msgs.text[pos] >= 'A' && msgs.text[pos] <= 'Z') || 
-                     (msgs.text[pos] >= '0' && msgs.text[pos] <= '9') ){
-                    fprintf( fp , "%c",msgs.text[pos]);
+                if ( (text[pos] >= 'a' && text[pos] <= 'z') ||
+                     (text[pos] >= 'A' && text[pos] <= 'Z') || 
+                     (text[pos] >= '0' && text[pos] <= '9') ){
+                    fprintf( fp , "%c",text[pos]);
                 } else {
                     fprintf( fp , ".");
                 }
@@ -1142,7 +1129,7 @@ int persist(msg_st msgs)
         }
         fprintf( fp , "================HEX PRINT END\n");
     } else {
-        fwrite(msgs.text , 1 , len , fp);
+        fwrite(text , 1 , len , fp);
         fwrite("\n" , 1, 1 , fp);
     }
     fclose(fp);
@@ -1873,7 +1860,7 @@ int main(int argc , char *argv[])
             reply(retmsg);
             free(retmsg);
         } else if ( strncmp(msgs.text , "moni" , 4) == 0){
-            retmsg = get_stat( STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
+            retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             reply(retmsg);
             free(retmsg);
         } else if ( strncmp(msgs.text , "load" , 4) == 0){
