@@ -1106,10 +1106,8 @@ int persist(char *text , int len , char type , struct timeval ts)
         for ( i = 0 ; i <= len/16 ; i ++){
             fprintf( fp , "%06d " , i);
             for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
-                ch = text[j+i*16];
-                fprintf( fp , "%c%c " , \
-                        ch/16 >= 10 ? ch/16-10+'A': ch/16+'0',\
-                        ch%16 >= 10 ? ch%16-10+'A': ch%16+'0');
+                ch = (unsigned char)text[j+i*16];
+                fprintf( fp , "%02X " , ch);
             }
             while ( j++ < 16 ){
                 fprintf( fp , "   ");

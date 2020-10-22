@@ -5,6 +5,7 @@ int outflag = 0;
 
 static void print_usage()
 {
+    printf("PRESS版本: %s\n" , PRESS_VERSION);
 	printf("<deam>    启动PRESS守护进程\n"  );
 	printf("<kill>    停止PRESS守护进程\n"  );
 	printf("<init>    启动通讯模块\n"  );

@@ -27,7 +27,7 @@
 #define SHORTCONN       3
 #define JIPSCONN        4 
 
-const char *PRESS_VERSION = "V1.0";
+const char *PRESS_VERSION = "V2.0";
 
 typedef struct comm_proc{
 	char 	type;					/*comm type , S or R*/
