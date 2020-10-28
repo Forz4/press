@@ -7,7 +7,6 @@
 #define MAX_CFG_VAL_LEN 50
 #define MAX_CFG_LINE_LEN 100
 #define MAX_MSG_LEN 2000
-#define PIDFILE "/tmp/press.pid"
 
 #define	timersub(tvp, uvp, vvp)						        \
 	do {								                    \
@@ -38,14 +37,12 @@ union semun {
 #endif
 
 extern int get_bracket(const char *line , int no , char *value , int val_size);
-extern int get_qid(char *key);
 extern int get_length(const char *);
 extern int padding(char *s , char dir , char sub , char *d , int d_len);
 extern void rTrim(char *str);
 extern void lTrim(char *str);
 extern int loadConfig(char *key , char *value  ,int val_len);
 void daemon_start();
-extern int check_deamon();
 extern int _pow(int , int);
 
 #endif

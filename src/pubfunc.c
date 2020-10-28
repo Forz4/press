@@ -30,21 +30,6 @@ extern int get_bracket(const char *line , int no , char *value , int val_size)
 	return 0;
 }
 
-extern int get_qid(char *key)
-{
-	char value[MAX_CFG_VAL_LEN];
-	int MSGKEY , qid;
-	if ( loadConfig(key , value , MAX_CFG_VAL_LEN) ){
-		return -1;
-	}
-	MSGKEY = atoi(value);
-	qid = msgget(MSGKEY , IPC_CREAT|0660);
-	if ( qid < 0 ){
-	    return -1;
-    }
-	return qid;
-}
-
 extern int get_length(const char *str)
 {
 	char buf[5];
@@ -176,29 +161,6 @@ void daemon_start()
 		umask(0);
 		return; 
 	}
-}
-extern int check_deamon()
-{
-    FILE *fp = NULL;
-    int  pid;
-    char pidbuf[20];
-    if ( access( PIDFILE , F_OK) == 0 ){
-        fp = fopen(PIDFILE , "rb");
-        if ( fp == NULL ){
-            return -1;
-        }
-        fgets( pidbuf , 20 , fp);
-        pid = atoi(pidbuf);
-        fclose(fp);
-        if ( kill(pid , 0) == 0 ){
-            return pid;
-        } else {
-            remove(PIDFILE);
-            return 0;
-        }
-    } else {
-        return 0;
-    }
 }
 extern int _pow(int base , int m)
 {

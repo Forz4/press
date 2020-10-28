@@ -29,6 +29,7 @@ typedef struct log_st{
 	struct log_st *next;
 }log_t;
 
+log_level_t	LOGLEVEL;           /* 日志级别 */
 extern int log_init(log_type_t type , char *filename);
 extern void log_clear();
 extern void log_write(log_type_t type, log_level_t level , char *fmt , ...);

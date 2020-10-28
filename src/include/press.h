@@ -5,6 +5,7 @@
 #include "log.h"
 #include "pubfunc.h"
 
+#define MAX_CMD_LEN 5000
 #define MAX_TPL_LEN 3000
 #define MAX_REP_LEN	50
 #define NOTLOADED 	    0
@@ -128,10 +129,13 @@ void    send_idle(int);
 rule_st *get_rule(FILE *fp);
 int     get_template(FILE *fp_tpl , tpl_st *mytpl);
 void    cleanRule(rule_st *ruleHead);
-void    reply(char *reply);
 char    *get_stat(int, conn_config_st * , pack_config_st *);
 char    *adjust_status(int , char * , pack_config_st *);
 void    status_op(int flag , int id , int adjustment , int percent , int direc , int *before , int *after);
+int     check_deamon();
+void    deamon_exit();
+void    deamon_signal_handler( int signo);
+
 
 #endif
 

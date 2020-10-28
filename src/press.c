@@ -1,7 +1,10 @@
 #include "include/press.h"
+#include "include/log.h"
 
 sigjmp_buf  jmpbuf;             /* 全局跳转结构 */
-int         QID_CMD = 0;        /* 控制台用消息队列ID */
+char        PIDFILE[200];       /* PIDFILE name*/
+char        CFGPATH[200];
+int         PORT_CMD = 0;       /* 命令监听端口 */
 int         QID_MSG = 0;        /* 报文传输队列 */
 int         HEART_INTERVAL;     /* 心跳时间间隔 */
 char        ENCODING;           /* A代表ascii码，H代表十六进制*/
@@ -14,7 +17,8 @@ int         g_mon_shmid = 0;    /* 共享内存实时监控区ID */
 stat_st    *g_stat;             /* 全局状态区指针 */
 monstat_st *g_mon_stat;         /* 实时状态区指针*/
 int         g_mon_semid = 0;    /* 全局信号量用于保护g_mon_shmid*/
-int         presscmd_pid = 0;   /* presscmd控制台进程ID  */
+conn_config_st *p_conn_conf = NULL;            /*configs for conn*/
+pack_config_st *p_pack_conf = NULL;            /*configs for pack*/
 
 /* for calculating real tps */
 int         lastTimeSendNum;    /* 上次查询时总发送笔数 */
@@ -30,15 +34,13 @@ int conn_config_load(conn_config_st *p_conn_conf)
     char pathname[MAX_PATHNAME_LEN];
     char line[200];
     char buf[100];
-    char value[MAX_CFG_VAL_LEN];
     comm_proc_st *cur = NULL;
     int  count = 0;
 
     if (p_conn_conf == NULL){
         return -1;
     }
-
-
+/*
     if (loadConfig("HEART_INTERVAL" , value , MAX_CFG_VAL_LEN) < 0){
         HEART_INTERVAL = 0;
         log_write(SYSLOG , LOGDBG , "HEART_INTERVAL取默认值%d",HEART_INTERVAL);
@@ -51,7 +53,7 @@ int conn_config_load(conn_config_st *p_conn_conf)
         ENCODING = 'A';
     else
         ENCODING = value[0];
-
+*/
     /*load connection config*/
     memset(pathname , 0x00 , sizeof(pathname));
     sprintf(pathname , "%s/cfg/conn.cfg" , getenv("PRESS_HOME"));
@@ -75,38 +77,60 @@ int conn_config_load(conn_config_st *p_conn_conf)
             return -1;
         }
 
+        /* 类型 */
         if (get_bracket(line , 1 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第1域错误");
+            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第1域[类型]错误");
             fclose(fp);
             return -1;
         }
         cur->type = buf[0];
 
+        /* IP */
         if (get_bracket(line , 2 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第2域错误");
+            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第2域[IP]错误");
             fclose(fp);
             return -1;
         }
         strncpy(cur->ip , buf , sizeof(cur->ip));
 
+        /* 端口 */
         if (get_bracket(line , 3 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第3域错误");
+            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第3域[端口]错误");
             fclose(fp);
             return -1;
         }
         cur->port = atoi(buf);
 
+        /* 持久化开关 */
         if (get_bracket(line , 4 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第4域错误");
+            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第4域[持久化开关]错误");
             fclose(fp);
             return -1;
         }
         cur->persist = atoi(buf);
 
+        /* 短链接并行度 */
         if (get_bracket(line , 5 , buf , 100)){
             cur->parallel = 1;
+        } else {
+            cur->parallel = atoi(buf);
         }
-        cur->parallel = atoi(buf);
+
+        /* 心跳包间隔 */
+        if (get_bracket(line , 6 , buf , 100)){
+            HEART_INTERVAL=0;
+        } else {
+            HEART_INTERVAL=atoi(buf);
+        }
+
+        /* 持久化编码 */
+        if (get_bracket(line , 7 , buf , 100)){
+            ENCODING='H';
+        } else if ( buf[0] != 'H' && buf[0] != 'A' ){
+            ENCODING='H';
+        } else {
+            ENCODING=buf[0];
+        }
 
         count ++;
         cur->next = p_conn_conf->process_head;
@@ -1356,17 +1380,6 @@ void cleanRule(rule_st *ruleHead)
     return;
 }
 
-void reply(char *rep)
-{
-    msg_st msgs;                                /*message for command*/
-    memset(&msgs , 0x00 , sizeof(msgs));
-    msgs.type = presscmd_pid;
-    msgs.pid = getpid();
-    strcpy(msgs.text , rep);
-    msgsnd((key_t)(QID_CMD) , &msgs , sizeof(msgs) - sizeof(long) , 0);
-    return;
-}
-
 char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
 {
     char *ret = (char *)malloc(MAX_MSG_LEN);
@@ -1425,7 +1438,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                 p_comm = p_comm->next;
             }
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n\n");
+                    "===========================================================================\n");
         } else {
             offset += sprintf(ret+offset , "无通讯模块进程信息,输入init启动通讯模块\n");
         }
@@ -1462,7 +1475,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                 p_pack = p_pack->next;
             }
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n\n");
+                    "===========================================================================\n");
         } else {
             offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置\n");
         }
@@ -1494,7 +1507,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                     g_mon_stat->real_recv_tps);
 
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n\n");
+                    "===========================================================================\n");
 
         } else {
             offset += sprintf(ret+offset , "无实时监控信息");
@@ -1694,221 +1707,33 @@ void status_op(int flag , int id , int adjustment , int percent , int direc , in
     return;
 }
 
-int main(int argc , char *argv[])
+int check_deamon()
 {
-    /* 检查环境变量 */
-    if ( getenv("PRESS_HOME") == NULL ){
-        printf("缺少环境变量${PRESS_HOME}\n");
-        exit(1);
-    }
-
-    /* 成为后台守护进程 */
-    daemon_start();
-
-    /* 初始化日志模块 */
-    log_init(SYSLOG , "system");
-    log_init(PCKLOG , "packing");
-    log_init(CONLOG , "connection");
-
-    /* 检查是否已存在运行的实例 */
-    if ( check_deamon() ){
-        log_write(SYSLOG , LOGERR , "守护进程已经在运行,不可重复启动");
-        exit(1);
-    }
-
-    /* 产生pidfile */
-    FILE *fp = fopen( PIDFILE , "wb");
-    if ( fp == NULL ){
-        log_write(SYSLOG , LOGERR , "无法打开pidfile %s , errno = %d" , PIDFILE , errno) ;
-    } else {
-        fprintf(fp , "%d" , getpid());
+    FILE *fp = NULL;
+    int  pid;
+    char pidbuf[20];
+    if ( access( PIDFILE , F_OK) == 0 ){
+        fp = fopen(PIDFILE , "rb");
+        if ( fp == NULL ){
+            return -1;
+        }
+        fgets( pidbuf , 20 , fp);
+        pid = atoi(pidbuf);
         fclose(fp);
-    }
-
-    log_write(SYSLOG , LOGINF , "守护进程启动成功");
-    log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME}=%s" , getenv("PRESS_HOME"));
-
-    /* 信号处理 */
-    signal(SIGCHLD , SIG_IGN);
-
-    conn_config_st *p_conn_conf = NULL;            /*configs for conn*/
-    pack_config_st *p_pack_conf = NULL;            /*configs for pack*/
-    msg_st msgs;                                /*message for command*/
-    char *retmsg = NULL;
-    int ret = 0;
-
-    /* 初始化信号量 */
-    g_mon_semid = sem_init();
-    if ( g_mon_semid < 0 ){
-        log_write(SYSLOG , LOGERR , "初始化信号量失败");
-        goto error_out;
-    }
-    log_write(SYSLOG , LOGINF , "初始化监控区信号量成功,g_mon_semid=%d",g_mon_semid);
-
-    /* 初始化命令消息队列 */
-    if ( (QID_CMD = get_qid("MSGKEY_CMD")) < 0){
-        log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_CMD]");
-        goto error_out;
-    }
-    log_write(SYSLOG , LOGINF , "初始化命令消息队列成功,QID_CMD=%d" , QID_CMD);
-
-    /* 初始化报文消息队列 */
-    if ( (QID_MSG = get_qid("MSGKEY_MSG")) < 0){
-        log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_MSG]");
-        goto error_out;
-    }
-    log_write(SYSLOG , LOGINF , "初始化报文消息队列成功,QID_MSG=%d" , QID_MSG);
-
-    /* 初始化全局结构体 */
-    p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
-    if ( p_conn_conf == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:malloc conn_config_st失败");
-        goto error_out;
-    }
-    p_conn_conf->status = NOTLOADED;
-
-    p_pack_conf = (pack_config_st *)malloc(sizeof(pack_config_st));
-    if ( p_pack_conf == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用malloc pack_config_st失败");
-        goto error_out;
-    }
-    p_pack_conf->status = NOTLOADED;
-
-    /* 初始化共享内存 */
-    g_shmid = shmget( IPC_PRIVATE , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
-    if ( g_shmid < 0 ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
-        goto error_out;
-    }
-    g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
-    if ( g_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_shmid);
-        goto error_out;
-    }
-    log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid );
-
-    g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
-    if ( g_mon_shmid < 0 ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
-        goto error_out;
-    }
-    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
-    if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_mon_shmid);
-        goto error_out;
-    }
-    log_write(SYSLOG , LOGINF , "初始化监控状态内存区成功,g_mon_shmid = %d" , g_mon_shmid);
-
-    /* 循环处理命令 */
-    while (1){
-        log_write(SYSLOG , LOGINF , "守护进程等待命令输入...");
-
-        memset(&msgs , 0x00 , sizeof(msgs));
-        ret = msgrcv((key_t)(QID_CMD) , &msgs , sizeof(msgs) - sizeof(long) , getpid() , 0);
-        if ( ret < 0 ){
-            log_write(SYSLOG , LOGERR , "内部错误:守护进程从命令队列读取命令失败,ret[%d],msgid=%d",ret,QID_CMD);
-            goto error_out;
+        if ( kill(pid , 0) == 0 ){
+            return pid;
+        } else {
+            remove(PIDFILE);
+            return 0;
         }
-        log_write(SYSLOG , LOGDBG ,"从presscmd客户端[pid=%d]收到命令[%s]" , msgs.pid , msgs.text);
-        presscmd_pid = msgs.pid;
-
-        if ( strncmp(msgs.text , "init" , 4) == 0 ){
-            if (p_conn_conf->status == RUNNING){
-                log_write(SYSLOG , LOGINF ,"[init]执行失败,通讯模块不可重复启动");
-                reply("[init]执行失败,通讯模块不可重复启动");
-                continue;
-            }
-            conn_start(p_conn_conf);
-            reply("[init]执行成功,输入[stat]查看状态");
-        } else if ( strncmp(msgs.text , "stop" , 4) == 0 ){
-            if (p_conn_conf->status != RUNNING){
-                log_write(SYSLOG , LOGINF ,"[stop]执行失败,通讯模块未启动");
-                reply("[stop]执行失败,输入[init]启动通讯模块");
-                continue;
-            }
-            conn_stop(p_conn_conf);
-            reply("[stop]执行成功,通讯进程已停止");
-        } else if ( strncmp(msgs.text , "send" , 4) == 0 ) {
-            /*
-            if ( p_conn_conf->status != RUNNING ) {
-                log_write(SYSLOG , LOGINF ,"[send]执行失败,通讯模块未启动");
-                reply("[send]执行失败,输入[init]启动通讯模块");
-                continue;
-            }
-            */
-            if ( p_pack_conf->status != LOADED ){
-                log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
-                reply("[send]执行失败,输入[load]加载组包进程配置");
-                continue;
-            }
-            pack_send(p_pack_conf);
-            log_write(SYSLOG , LOGINF ,"[send]执行成功");
-            reply("[send]执行成功,输入[stat]或[moni]查看发送情况");
-        } else if ( strncmp(msgs.text , "shut" , 4) == 0){
-            pack_shut(p_pack_conf);
-            log_write(SYSLOG , LOGINF ,"[shut]执行成功");
-            reply("[shut]执行成功,组包进程已停止");
-        } else if ( strncmp(msgs.text , "kill" , 4) == 0 ){
-            reply("[kill]执行成功,守护进程正在退出");
-            pack_shut(p_pack_conf);
-            conn_stop(p_conn_conf);
-            break;
-        } else if ( strncmp(msgs.text , "stat" , 4) == 0){
-            retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
-            reply(retmsg);
-            free(retmsg);
-        } else if ( strncmp(msgs.text , "moni" , 4) == 0){
-            retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
-            reply(retmsg);
-            free(retmsg);
-        } else if ( strncmp(msgs.text , "load" , 4) == 0){
-            if ( pack_load(msgs.text , p_pack_conf) ){
-                log_write(SYSLOG , LOGERR ,"[load]执行失败");
-                reply("[load]执行失败");
-                continue;
-            } else {
-                log_write(SYSLOG , LOGINF ,"[load]执行成功");
-                reply("[load]执行成功");
-                continue;
-            }
-        } else if ( strncmp( msgs.text , "tps" , 3) == 0){
-            if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
-                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
-                reply("[tps]执行失败,输入[load]加载组包进程配置");
-                continue;
-            }
-            retmsg = adjust_status( 1 , msgs.text , p_pack_conf);
-            reply(retmsg);
-            free(retmsg);
-        } else if ( strncmp( msgs.text , "time" , 4) == 0 ){
-            if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
-                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
-                reply("[tps]执行失败,输入[load]加载组包进程配置");
-                continue;
-            }
-            retmsg = adjust_status( 2 , msgs.text , p_pack_conf);
-            reply(retmsg);
-            free(retmsg);
-        } else if ( strncmp( msgs.text , "para" , 4) == 0 ){
-            if ( p_conn_conf->status != RUNNING ){
-                log_write(SYSLOG , LOGINF ,"[para]执行失败,组包进程未启动");
-                reply("[para]执行失败,组包进程未启动");
-                continue;
-            }
-            retmsg = adjust_para( msgs.text , p_conn_conf);
-            reply(retmsg);
-            free(retmsg);
-        }
+    } else {
+        return 0;
     }
+}
 
-    /* 退出清理 */
-error_out:
+void deamon_exit()
+{
     sleep(1);
-
-    /* 删除命令消息队列key */
-    if ( msgctl((key_t)QID_CMD , IPC_RMID , NULL) ){
-        log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_CMD);
-    }
     /* 删除报文消息队列key */
     if ( msgctl((key_t)QID_MSG , IPC_RMID , NULL) ){
         log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_MSG);
@@ -1934,7 +1759,254 @@ error_out:
     pack_config_free(p_pack_conf);
     conn_config_free(p_conn_conf);
     /* 删除pidfile */
-    remove("/tmp/press.pid");
+    remove(PIDFILE);
+    exit(0);
+}
 
-    return 0;
+void deamon_signal_handler( int signo)
+{
+    deamon_exit();
+}
+
+int main(int argc , char *argv[])
+{
+    /* 检查环境变量 */
+    if ( getenv("PRESS_HOME") == NULL ){
+        printf("缺少环境变量${PRESS_HOME}\n");
+        exit(1);
+    }
+    int op = 0;
+    PORT_CMD = 6043;        /* 默认监听端口 */
+    LOGLEVEL = 4;           /* 默认日志级别 */
+    while ( ( op = getopt( argc , argv , "p:l:f:h") ) > 0 ) {
+        switch(op){
+            case 'h' :
+                exit(0);
+            case 'p' :
+                PORT_CMD = atoi(optarg);
+                break;
+            case 'l' :
+                LOGLEVEL = atoi(optarg);
+                break;
+        }
+    }
+    printf("PORT_CMD[%d]\n" , PORT_CMD);
+    printf("LOGLEVEL[%d]\n" , LOGLEVEL);
+    sprintf(PIDFILE , "/tmp/press.%d" , PORT_CMD);
+
+    /* 检查是否已存在运行的实例 */
+    if ( check_deamon() ){
+        printf("守护进程已经在运行,不可重复启动\n");
+        exit(1);
+    }
+
+    /* 成为后台守护进程 */
+    daemon_start();
+
+    /* 初始化日志模块 */
+    log_init(SYSLOG , "system");
+    log_init(PCKLOG , "packing");
+    log_init(CONLOG , "connection");
+
+    /* 产生pidfile */
+    FILE *fp = fopen( PIDFILE , "wb");
+    if ( fp == NULL ){
+        log_write(SYSLOG , LOGERR , "无法打开pidfile %s , errno = %d" , PIDFILE , errno) ;
+    } else {
+        fprintf(fp , "%d" , getpid());
+        fclose(fp);
+    }
+    log_write(SYSLOG , LOGINF , "守护进程启动成功");
+    log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME}=%s" , getenv("PRESS_HOME"));
+
+    /* 信号处理 */
+    signal(SIGCHLD , SIG_IGN);
+    signal(SIGKILL , deamon_signal_handler);
+    signal(SIGTERM , deamon_signal_handler);
+
+    char *retmsg = NULL;
+    /* 初始化信号量 */
+    g_mon_semid = sem_init();
+    if ( g_mon_semid < 0 ){
+        log_write(SYSLOG , LOGERR , "初始化信号量失败");
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGINF , "初始化监控区信号量成功,g_mon_semid=%d",g_mon_semid);
+
+    /* 初始化报文消息队列 */
+    if ( (QID_MSG = msgget(IPC_PRIVATE , IPC_CREAT|0660)) < 0){
+        log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_MSG]");
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGINF , "初始化报文消息队列成功,QID_MSG=%d" , QID_MSG);
+
+    /* 初始化全局结构体 */
+    p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
+    if ( p_conn_conf == NULL ){
+        log_write(SYSLOG , LOGERR , "内部错误:malloc conn_config_st失败");
+        deamon_exit();
+    }
+    p_conn_conf->status = NOTLOADED;
+
+    p_pack_conf = (pack_config_st *)malloc(sizeof(pack_config_st));
+    if ( p_pack_conf == NULL ){
+        log_write(SYSLOG , LOGERR , "内部错误:调用malloc pack_config_st失败");
+        deamon_exit();
+    }
+    p_pack_conf->status = NOTLOADED;
+
+    /* 初始化共享内存 */
+    g_shmid = shmget( IPC_PRIVATE , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
+    if ( g_shmid < 0 ){
+        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
+        deamon_exit();
+    }
+    g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
+    if ( g_stat == NULL ){
+        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_shmid);
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid );
+
+    g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
+    if ( g_mon_shmid < 0 ){
+        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
+        deamon_exit();
+    }
+    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
+    if ( g_mon_stat == NULL ){
+        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_mon_shmid);
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGINF , "初始化监控状态内存区成功,g_mon_shmid = %d" , g_mon_shmid);
+
+    /* 加载监听端口配置 */
+    char buffer_cmd[MAX_CMD_LEN];
+    /* 创建监听socket */
+    int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
+    int sock_recv = 0;
+    struct sockaddr_in server_sockaddr;
+    struct sockaddr_in client_addr;
+    socklen_t socket_len = sizeof(client_addr);
+    /* bind 端口*/
+    server_sockaddr.sin_family = AF_INET;
+    server_sockaddr.sin_port = htons(PORT_CMD);
+    server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
+    {
+        log_write(SYSLOG , LOGERR , "命令监听端口[%d]bind 失败" , PORT_CMD);
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGDBG , "命令监听端口[%d]bind 成功" , PORT_CMD);
+    /* 启动监听 */
+    if(listen(server_sockfd , 1) == -1){
+        log_write(SYSLOG , LOGERR , "命令监听端口[%d]监听失败" , PORT_CMD);
+        deamon_exit();
+    }
+    log_write(SYSLOG , LOGDBG , "命令监听端口[%d]监听成功" , PORT_CMD);
+
+    /* 循环处理命令 */
+    while (1){
+        log_write(SYSLOG , LOGINF , "守护进程等待命令输入...");
+
+        /* 接受远端连接 */
+        sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
+        if (sock_recv < 0){
+            log_write(SYSLOG , LOGERR , "命令监听端口[%d]accept 失败" , PORT_CMD);
+            deamon_exit();
+        }
+        log_write(SYSLOG , LOGDBG , "命令监听端口[%d]accept 成功" , PORT_CMD);
+        memset( buffer_cmd , 0x00 , sizeof(buffer_cmd));
+        /* 读取命令内容 */
+        if ( recv(sock_recv , buffer_cmd , MAX_CMD_LEN , 0) < 0 ){
+            log_write(SYSLOG , LOGERR , "监听命令端口[%d]recv 失败" , PORT_CMD);
+            deamon_exit();
+        }
+        log_write(SYSLOG , LOGDBG , "收到命令%s\n" , buffer_cmd);
+
+        if ( strncmp(buffer_cmd , "init" , 4) == 0 ){
+            if (p_conn_conf->status == RUNNING){
+                log_write(SYSLOG , LOGINF ,"[init]执行失败,通讯模块不可重复启动");
+                send( sock_recv , "[init]执行失败,通讯模块不可重复启动" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            conn_start(p_conn_conf);
+            send( sock_recv , "[init]执行成功,输入[stat]查看状态" , MAX_CMD_LEN , 0 );
+        } else if ( strncmp(buffer_cmd , "stop" , 4) == 0 ){
+            if (p_conn_conf->status != RUNNING){
+                log_write(SYSLOG , LOGINF ,"[stop]执行失败,通讯模块未启动");
+                send( sock_recv , "[stop]执行失败,输入[init]启动通讯模块" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            conn_stop(p_conn_conf);
+            send( sock_recv , "[stop]执行成功,通讯进程已停止" , MAX_CMD_LEN , 0);
+        } else if ( strncmp(buffer_cmd , "send" , 4) == 0 ) {
+            if ( p_pack_conf->status != LOADED ){
+                log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
+                send( sock_recv , "[send]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            pack_send(p_pack_conf);
+            log_write(SYSLOG , LOGINF ,"[send]执行成功");
+            send( sock_recv , "[send]执行成功,输入[stat]或[moni]查看发送情况" , MAX_CMD_LEN , 0);
+        } else if ( strncmp(buffer_cmd , "shut" , 4) == 0){
+            pack_shut(p_pack_conf);
+            log_write(SYSLOG , LOGINF ,"[shut]执行成功");
+            send( sock_recv , "[shut]执行成功,组包进程已停止" , MAX_CMD_LEN , 0);
+        } else if ( strncmp(buffer_cmd , "kill" , 4) == 0 ){
+            send( sock_recv , "[kill]执行成功,守护进程正在退出" , MAX_CMD_LEN , 0);
+            pack_shut(p_pack_conf);
+            conn_stop(p_conn_conf);
+            break;
+        } else if ( strncmp(buffer_cmd , "stat" , 4) == 0){
+            retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
+            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+            free(retmsg);
+        } else if ( strncmp(buffer_cmd , "moni" , 4) == 0){
+            retmsg = get_stat( STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
+            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+            free(retmsg);
+        } else if ( strncmp(buffer_cmd , "load" , 4) == 0){
+            if ( pack_load(buffer_cmd , p_pack_conf) ){
+                log_write(SYSLOG , LOGERR ,"[load]执行失败");
+                send( sock_recv , "[load]执行失败" , MAX_CMD_LEN , 0);
+                continue;
+            } else {
+                log_write(SYSLOG , LOGINF ,"[load]执行成功");
+                send( sock_recv , "[load]执行成功" , MAX_CMD_LEN , 0);
+                continue;
+            }
+        } else if ( strncmp( buffer_cmd , "tps" , 3) == 0){
+            if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
+                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
+                send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            retmsg = adjust_status( 1 , buffer_cmd , p_pack_conf);
+            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+            free(retmsg);
+        } else if ( strncmp( buffer_cmd , "time" , 4) == 0 ){
+            if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
+                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
+                send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+            free(retmsg);
+        } else if ( strncmp( buffer_cmd , "para" , 4) == 0 ){
+            if ( p_conn_conf->status != RUNNING ){
+                log_write(SYSLOG , LOGINF ,"[para]执行失败,组包进程未启动");
+                send( sock_recv , "[para]执行失败,组包进程未启动" , MAX_CMD_LEN , 0);
+                continue;
+            }
+            retmsg = adjust_para( buffer_cmd , p_conn_conf);
+            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+            free(retmsg);
+        } else if ( strncmp( buffer_cmd , "list" , 4) == 0 ){
+            send( sock_recv , "OK" , MAX_CMD_LEN , 0);
+        }
+        close(sock_recv);
+    }
+    /* 退出清理 */
+    deamon_exit();
 }

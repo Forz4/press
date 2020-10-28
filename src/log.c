@@ -1,16 +1,16 @@
 #include "include/log.h"
 
 log_t *log_head = NULL;
-log_level_t	LOGLEVEL;
 
 int log_init(log_type_t type , char *filename)
 {
-	char key[]="LOGLEVEL";
-	char value[MAX_CFG_VAL_LEN];
 	log_t *cur = NULL;
 	char pathname[MAX_PATHNAME_LEN];
 	memset(pathname , 0x00 , sizeof(pathname));
 	sprintf(pathname , "%s/log/%s.log" , getenv("PRESS_HOME") , filename);
+    /*
+	char key[]="LOGLEVEL";
+	char value[MAX_CFG_VAL_LEN];
 
 	if (log_head == NULL){
 		if (loadConfig(key , value , MAX_CFG_VAL_LEN)){
@@ -19,6 +19,7 @@ int log_init(log_type_t type , char *filename)
 			LOGLEVEL = atoi(value);
 		}
 	}
+    */
 
 	cur = (log_t *)malloc(sizeof(log_t));
 	if ( cur == NULL )
