@@ -1,12 +1,10 @@
 #include "include/presscmd.h"
-#include "include/press.h"
 
 int outflag = 0;
 
 static void print_usage()
 {
-    printf("PRESS版本: %s\n" , PRESS_VERSION);
-	printf("<deam>    启动PRESS守护进程\n"  );
+	//printf("<deam>    启动PRESS守护进程\n"  );
 	printf("<kill>    停止PRESS守护进程\n"  );
 	printf("<init>    启动通讯模块\n"  );
 	printf("<stop>    停止通讯模块\n"  );
@@ -35,7 +33,12 @@ static void print_usage()
 	printf("<help>    打印帮助\n");
 	return;
 }
-
+static void print_help()
+{
+    printf("PRESS版本: %s\n" , PRESS_VERSION);
+    printf("presscmd [-n ip:port] [-f nodelist]\n");
+    return;
+}
 void sig_handler(int signo)
 {
     switch (signo){
@@ -65,11 +68,27 @@ int parse_ip_port( char *optarg , char *ip , int *port)
     return 0;
 }
 
+void  getNodeList( char *filename , char ip[MAX_NODE_NUM][20] , int port[MAX_NODE_NUM] , int *numOfNode )
+{
+    FILE    *fp = fopen( filename , "r");
+    char    buffer[200];
+    int     i = 0;
+    if ( fp == NULL )
+        return;
+    while ( fscanf( fp , "%s" , buffer) != EOF ){
+        parse_ip_port( buffer , ip[i] , &port[i] );
+        i ++;
+    }
+    fclose(fp);
+    *numOfNode = i;
+    return ;
+}
+
 int main(int argc , char *argv[])
 {
 	/*variables*/
     char inputLine[200];
-    char buffer[MAX_CMD_LEN];
+    char buffer[2000];
     //int  press_pid = 0;
     int  monitor_mode = 0;
 
@@ -85,13 +104,17 @@ int main(int argc , char *argv[])
     int  nodeIndex = 0; 
 
     int  i = 0;
-    while ( ( op = getopt( argc , argv , "n:h") ) > 0 ) {
+    while ( ( op = getopt( argc , argv , "n:f:h") ) > 0 ) {
         switch(op){
             case 'n' :
                 parse_ip_port( optarg , ip[numOfNode] , &port[numOfNode] );
                 numOfNode ++;
                 break;
+            case 'f' :
+                getNodeList( optarg , ip , port , &numOfNode );
+                break;
             case 'h' :
+                print_help();
                 exit(0);
         }
     }
@@ -120,9 +143,9 @@ int main(int argc , char *argv[])
         }
         */
         if ( nodeIndex == 0 ){
-            printf("presscmd(所有节点)> ");
+            printf("presscmd(全部节点)> ");
         } else {
-            printf("presscmd(节点%d)> ",nodeIndex);
+            printf("presscmd(节点%d)> " , nodeIndex);
         }
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
@@ -235,9 +258,7 @@ TAGMONITOR:
             if ( memcmp( inputLine , "list" , 4) == 0 ){
                 printf("节点%d[%s:%d]:%s\n" , i+1 , ip[i] , port[i] , buffer);
             } else {
-                printf("===========================================================================\n");
                 printf("节点%d[%s:%d]\n" , i+1 , ip[i] , port[i]);
-                printf("===========================================================================\n");
 	            printf("%s\n" , buffer);
             }
             close(sock_send);

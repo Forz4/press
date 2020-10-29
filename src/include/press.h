@@ -4,6 +4,7 @@
 #include "common.h"
 #include "log.h"
 #include "pubfunc.h"
+#include "version.h"
 
 #define MAX_CMD_LEN 5000
 #define MAX_TPL_LEN 3000
@@ -28,8 +29,6 @@
 #define SHORTCONN       3
 #define JIPSCONN        4 
 
-const char *PRESS_VERSION = "V2.0";
-
 typedef struct comm_proc{
 	char 	type;					/*comm type , S or R*/
 	pid_t 	pid;					/*process id*/
@@ -43,8 +42,6 @@ typedef struct comm_proc{
 
 typedef struct conn_config{
 	int 	status;					/*0: config not loaded , 1: config loaded but not started , 2: process started*/
-	int 	qid_in;
-	int 	qid_out;
 	struct 	comm_proc *process_head;
 }conn_config_st;
 
@@ -135,7 +132,7 @@ void    status_op(int flag , int id , int adjustment , int percent , int direc ,
 int     check_deamon();
 void    deamon_exit();
 void    deamon_signal_handler( int signo);
-
+void    print_help();
 
 #endif
 

@@ -734,15 +734,11 @@ void conn_jips_signal_handler(int signo)
 /* 停止通讯模块 */
 int conn_stop(conn_config_st *p_conn_conf)
 {
-    int ret = 0;
     comm_proc_st *cur;
 
     if (p_conn_conf == NULL){
         return -1;
     }
-
-    ret = msgctl((key_t)p_conn_conf->qid_out , IPC_RMID , NULL);
-    ret = msgctl((key_t)p_conn_conf->qid_in , IPC_RMID , NULL);
 
     cur = p_conn_conf->process_head;
     while (cur != NULL){
@@ -750,10 +746,12 @@ int conn_stop(conn_config_st *p_conn_conf)
         if ( cur->type == 'X' ){
             int i = 0;
             for ( i = 0 ;i < cur->parallel ; i ++ ){
-                kill(cur->para_pids[i] , SIGTERM);
+                if (cur->para_pids[i] > 0 )
+                    kill(cur->para_pids[i] , SIGTERM);
             }
         } else {
-            kill(cur->pid , SIGTERM);
+            if ( cur->pid > 0 )
+                kill(cur->pid , SIGTERM);
         }
         cur=cur->next;
     }
@@ -958,7 +956,7 @@ int pack_shut(pack_config_st *p_pack_conf)
     stat_st         *l_stat = NULL;
 
     while ( pit_cur != NULL ){
-        if( pit_cur->pid){
+        if( pit_cur->pid > 0 ){
             kill(pit_cur->pid , SIGTERM);
             l_stat = g_stat+pit_cur->index;
             l_stat->tag = FINISHED;
@@ -1737,21 +1735,29 @@ void deamon_exit()
     /* 删除报文消息队列key */
     if ( msgctl((key_t)QID_MSG , IPC_RMID , NULL) ){
         log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_MSG);
+    } else {
+        log_write(SYSLOG , LOGINF ,"msgctl删除命令消息队列msgid=%d成功",QID_MSG);
     }
     /* 卸载、删除共享内存key */
     shmdt((void *)g_stat);
     if ( shmctl(g_shmid , IPC_RMID , 0) ){
         log_write(SYSLOG , LOGERR ,"shmctl删除shmid=%d失败",g_shmid);
+    } else {
+        log_write(SYSLOG , LOGINF ,"shmctl删除shmid=%d成功",g_shmid);
     }
     shmdt((void *)g_mon_stat);
     if ( shmctl(g_mon_shmid , IPC_RMID , 0) ){
         log_write(SYSLOG , LOGERR ,"shmctl删除shmid=%d失败",g_mon_shmid);
+    } else {
+        log_write(SYSLOG , LOGINF ,"shmctl删除shmid=%d成功",g_mon_shmid);
     }
     /* 删除信号量key */
     union semun arg;
     arg.val = (short)0;
     if ( semctl(g_mon_semid,0,IPC_RMID,arg) ){
         log_write(SYSLOG , LOGERR ,"semctl删除semid=%d失败",g_mon_semid);
+    } else {
+        log_write(SYSLOG , LOGINF ,"semctl删除semid=%d成功",g_mon_semid);
     }
     /* 释放日志句柄 */
     log_clear();
@@ -1767,7 +1773,13 @@ void deamon_signal_handler( int signo)
 {
     deamon_exit();
 }
-
+void print_help()
+{
+    printf("press [-p port] [-l loglevel] [-h]\n");
+    printf("       -p 指定监听端口(默认6043)\n");
+    printf("       -l 指定日志级别(默认4)\n");
+    return ;
+}
 int main(int argc , char *argv[])
 {
     /* 检查环境变量 */
@@ -1778,9 +1790,10 @@ int main(int argc , char *argv[])
     int op = 0;
     PORT_CMD = 6043;        /* 默认监听端口 */
     LOGLEVEL = 4;           /* 默认日志级别 */
-    while ( ( op = getopt( argc , argv , "p:l:f:h") ) > 0 ) {
+    while ( ( op = getopt( argc , argv , "p:l:h") ) > 0 ) {
         switch(op){
             case 'h' :
+                print_help();
                 exit(0);
             case 'p' :
                 PORT_CMD = atoi(optarg);
@@ -1790,8 +1803,6 @@ int main(int argc , char *argv[])
                 break;
         }
     }
-    printf("PORT_CMD[%d]\n" , PORT_CMD);
-    printf("LOGLEVEL[%d]\n" , LOGLEVEL);
     sprintf(PIDFILE , "/tmp/press.%d" , PORT_CMD);
 
     /* 检查是否已存在运行的实例 */
@@ -1922,42 +1933,47 @@ int main(int argc , char *argv[])
             log_write(SYSLOG , LOGERR , "监听命令端口[%d]recv 失败" , PORT_CMD);
             deamon_exit();
         }
-        log_write(SYSLOG , LOGDBG , "收到命令%s\n" , buffer_cmd);
+        log_write(SYSLOG , LOGDBG , "收到命令[%s]\n" , buffer_cmd);
 
         if ( strncmp(buffer_cmd , "init" , 4) == 0 ){
             if (p_conn_conf->status == RUNNING){
                 log_write(SYSLOG , LOGINF ,"[init]执行失败,通讯模块不可重复启动");
                 send( sock_recv , "[init]执行失败,通讯模块不可重复启动" , MAX_CMD_LEN , 0);
-                continue;
+            } else {
+                conn_start(p_conn_conf);
+                send( sock_recv , "[init]执行成功,输入[stat]查看状态" , MAX_CMD_LEN , 0 );
             }
-            conn_start(p_conn_conf);
-            send( sock_recv , "[init]执行成功,输入[stat]查看状态" , MAX_CMD_LEN , 0 );
         } else if ( strncmp(buffer_cmd , "stop" , 4) == 0 ){
             if (p_conn_conf->status != RUNNING){
                 log_write(SYSLOG , LOGINF ,"[stop]执行失败,通讯模块未启动");
                 send( sock_recv , "[stop]执行失败,输入[init]启动通讯模块" , MAX_CMD_LEN , 0);
-                continue;
+            } else {
+                conn_stop(p_conn_conf);
+                send( sock_recv , "[stop]执行成功,通讯进程已停止" , MAX_CMD_LEN , 0);
             }
-            conn_stop(p_conn_conf);
-            send( sock_recv , "[stop]执行成功,通讯进程已停止" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "send" , 4) == 0 ) {
             if ( p_pack_conf->status != LOADED ){
                 log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
                 send( sock_recv , "[send]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
-                continue;
+            } else {
+                pack_send(p_pack_conf);
+                log_write(SYSLOG , LOGINF ,"[send]执行成功");
+                send( sock_recv , "[send]执行成功,输入[stat]或[moni]查看发送情况" , MAX_CMD_LEN , 0);
             }
-            pack_send(p_pack_conf);
-            log_write(SYSLOG , LOGINF ,"[send]执行成功");
-            send( sock_recv , "[send]执行成功,输入[stat]或[moni]查看发送情况" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "shut" , 4) == 0){
             pack_shut(p_pack_conf);
             log_write(SYSLOG , LOGINF ,"[shut]执行成功");
             send( sock_recv , "[shut]执行成功,组包进程已停止" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "kill" , 4) == 0 ){
+            if (pack_shut(p_pack_conf) ) {
+                log_write(SYSLOG , LOGERR ,"组包进程停止失败");
+            }
+            if ( conn_stop(p_conn_conf) ){
+                log_write(SYSLOG , LOGERR ,"通讯进程停止失败");
+            }
             send( sock_recv , "[kill]执行成功,守护进程正在退出" , MAX_CMD_LEN , 0);
-            pack_shut(p_pack_conf);
-            conn_stop(p_conn_conf);
-            break;
+            close(sock_recv);
+            deamon_exit();
         } else if ( strncmp(buffer_cmd , "stat" , 4) == 0){
             retmsg = get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
@@ -1970,34 +1986,31 @@ int main(int argc , char *argv[])
             if ( pack_load(buffer_cmd , p_pack_conf) ){
                 log_write(SYSLOG , LOGERR ,"[load]执行失败");
                 send( sock_recv , "[load]执行失败" , MAX_CMD_LEN , 0);
-                continue;
             } else {
                 log_write(SYSLOG , LOGINF ,"[load]执行成功");
                 send( sock_recv , "[load]执行成功" , MAX_CMD_LEN , 0);
-                continue;
             }
         } else if ( strncmp( buffer_cmd , "tps" , 3) == 0){
             if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
                 log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
                 send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
-                continue;
+            } else {
+                retmsg = adjust_status( 1 , buffer_cmd , p_pack_conf);
+                send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+                free(retmsg);
             }
-            retmsg = adjust_status( 1 , buffer_cmd , p_pack_conf);
-            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
-            free(retmsg);
         } else if ( strncmp( buffer_cmd , "time" , 4) == 0 ){
             if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
                 log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
                 send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
-                continue;
+            } else {
+                send( sock_recv , retmsg , MAX_CMD_LEN , 0);
+                free(retmsg);
             }
-            send( sock_recv , retmsg , MAX_CMD_LEN , 0);
-            free(retmsg);
         } else if ( strncmp( buffer_cmd , "para" , 4) == 0 ){
             if ( p_conn_conf->status != RUNNING ){
                 log_write(SYSLOG , LOGINF ,"[para]执行失败,组包进程未启动");
                 send( sock_recv , "[para]执行失败,组包进程未启动" , MAX_CMD_LEN , 0);
-                continue;
             }
             retmsg = adjust_para( buffer_cmd , p_conn_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
