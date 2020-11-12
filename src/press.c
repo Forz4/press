@@ -40,20 +40,6 @@ int conn_config_load(conn_config_st *p_conn_conf)
     if (p_conn_conf == NULL){
         return -1;
     }
-/*
-    if (loadConfig("HEART_INTERVAL" , value , MAX_CFG_VAL_LEN) < 0){
-        HEART_INTERVAL = 0;
-        log_write(SYSLOG , LOGDBG , "HEART_INTERVAL取默认值%d",HEART_INTERVAL);
-    } else {
-        HEART_INTERVAL = atoi(value);
-        log_write(SYSLOG , LOGDBG , "从配置文件press.cfg读取HEART_INTERVAL=%d",HEART_INTERVAL);
-    }
-
-    if (loadConfig("ENCODING" , value , MAX_CFG_VAL_LEN) < 0)
-        ENCODING = 'A';
-    else
-        ENCODING = value[0];
-*/
     /*load connection config*/
     memset(pathname , 0x00 , sizeof(pathname));
     sprintf(pathname , "%s/cfg/conn.cfg" , getenv("PRESS_HOME"));
@@ -162,7 +148,8 @@ void conn_config_free(conn_config_st *p_conn_conf)
     while (cur != NULL)
     {
         nex = cur->next;
-        free(cur);
+        if ( cur )
+            free(cur);
         cur = nex;
     }
     return ;
@@ -477,6 +464,7 @@ int conn_sender_start(comm_proc_st *p_sender)
 /*=========== 短链接的逻辑 ==============*/
         if ( p_sender->type == 'X' ){
             log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] 开始recv" ,p_sender->type ,  p_sender->ip , p_sender->port);
+            memset( buffer , 0x00 , sizeof(buffer) );
             recvlen = recv(sock_send , buffer , 4 , 0);
             if (recvlen < 0){
                 break;
@@ -484,6 +472,8 @@ int conn_sender_start(comm_proc_st *p_sender)
                 continue;
             } else {
                 textlen = atoi(buffer);
+                log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] recv成功,buffer[%02x|%02x|%02x|%02x]" ,\
+                    p_sender->type,p_sender->ip,p_sender->port,buffer[0],buffer[1],buffer[2],buffer[3]);
                 nTotal = 0;
                 nRead = 0;
                 nLeft = textlen;
@@ -494,7 +484,6 @@ int conn_sender_start(comm_proc_st *p_sender)
                     nLeft -= nRead;
                 }
             }
-            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] recv成功,textlen[%d]" ,p_sender->type ,  p_sender->ip , p_sender->port , textlen);
 
             sem_lock(g_mon_semid);
             g_mon_stat->recv_num ++;
@@ -776,7 +765,8 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     memset(config_fn , 0x00 , sizeof(config_fn));
 
     /* clear previous configs first */
-    pack_config_free(p_pack_conf);
+    if ( p_pack_conf )
+        pack_config_free(p_pack_conf);
     
     /* load pitcher processes */
     memset(pathname , 0x00 , sizeof(pathname));
@@ -891,7 +881,8 @@ int pack_config_free(pack_config_st *p_pack_conf)
         pit_cur = pit_cur->next;
         fclose(pit_del->tpl_fp);
         fclose(pit_del->rule_fp);
-        free(pit_del);
+        if ( pit_del )
+            free(pit_del);
     }
 
     log_write(SYSLOG , LOGDBG ,  "清理组包配置完成");
@@ -1367,7 +1358,7 @@ void cleanRule(rule_st *ruleHead)
                 cur->rep_head = NULL;
             } else {
                 rep_cur = cur->rep_head->next->next;
-                free(rep_cur->next);
+                free(cur->rep_head->next);
                 cur->rep_head->next = rep_cur;
             }
         }
@@ -1828,7 +1819,8 @@ int main(int argc , char *argv[])
         fclose(fp);
     }
     log_write(SYSLOG , LOGINF , "守护进程启动成功");
-    log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME}=%s" , getenv("PRESS_HOME"));
+    log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME} [%s]" , getenv("PRESS_HOME"));
+    log_write(SYSLOG , LOGINF , "监听端口              [%d]" , PORT_CMD);
 
     /* 信号处理 */
     signal(SIGCHLD , SIG_IGN);
@@ -2004,6 +1996,7 @@ int main(int argc , char *argv[])
                 log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
                 send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
             } else {
+                retmsg = adjust_status( 2 , buffer_cmd , p_pack_conf);
                 send( sock_recv , retmsg , MAX_CMD_LEN , 0);
                 free(retmsg);
             }
