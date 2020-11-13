@@ -4,38 +4,36 @@ int outflag = 0;
 
 static void print_usage()
 {
-	//printf("<deam>    启动PRESS守护进程\n"  );
-	printf("<kill>    停止PRESS守护进程\n"  );
-	printf("<init>    启动通讯模块\n"  );
-	printf("<stop>    停止通讯模块\n"  );
-	printf("<send>    启动组包和持久化进程\n");
-	printf("<shut>    停止组包和持久化进程\n");
-	printf("<stat>    查看状态\n");
-	printf("<load>    加载组包配置文件\n");
-	printf("          <load [文件名]>\n");
-	printf("<moni>    开启监视器模式\n");
-	printf("<tps>     设置实时TPS值,命令格式:\n");
-	printf("          <tps [+-]调整值[%%] [序号]>\n");
-	printf("           tps +100\t\t将所有组包进程tps增加100\n");
-	printf("           tps -10%%\t\t将所有组包进程tps减少10%%\n");
-	printf("           tps +100%% 0\t\t将序号为0的组包进程tps增加100%%\n");
-	printf("           tps 10\t\t将所有的组包进程tps设置为10\n");
-	printf("           tps 10 1\t\t将序号为1的组包进程tps设置为10\n");
-	printf("<time>    设置发送时间,命令格式:\n");
-	printf("          <time [+-]调整值[%%] [序号]>\n");
-	printf("          举例参考tps命令\n");
-	printf("<para>    设置短链接并发数\n");
+	printf("<kill>    stop deamon process\n"  );
+	printf("<init>    start connection module\n"  );
+	printf("<stop>    stop connection module\n"  );
+	printf("<send>    start packing module\n");
+	printf("<shut>    stop packing module\n");
+	printf("<stat>    check status\n");
+	printf("<load>    load packing configs\n");
+	printf("          <load [filename]>\n");
+	printf("<moni>    start monitor mode\n");
+	printf("<tps>     set real TPS\n");
+	printf("          <tps [+-]adjustment[%%] [index]>\n");
+	printf("           tps +100\t\tadd 100 tps to all packing processes\n");
+	printf("           tps -10%%\t\tminus 10%% tps from all packing processes\n");
+	printf("           tps +100%% 0\t\tadd 100%% tps to packing process with index 0\n");
+	printf("           tps 10\t\tset all packing process to 10 tps\n");
+	printf("           tps 10 1\t\tset packing process with index 1 to 10 tps\n");
+	printf("<time>    set TIME\n");
+	printf("          <time [+-]adjustment[%%] [index]>\n");
+	printf("<para>    set parallel number of connection process(only for short connection)\n");
 	printf("          <para parallel_num>\n");
-	printf("<list>    列出所有节点信息\n");
-	printf("<conn>    仅连接某一个节点\n");
+	printf("<list>    list all nodes\n");
+	printf("<conn>    connection to a single node\n");
 	printf("          <conn index>\n");
-	printf("<exit>    退出客户端\n");
-	printf("<help>    打印帮助\n");
+	printf("<exit>    exit presscmd\n");
+	printf("<help>    print help\n");
 	return;
 }
 static void print_help()
 {
-    printf("PRESS版本: %s\n" , PRESS_VERSION);
+    printf("PRESS VERSION: %s\n" , PRESS_VERSION);
     printf("presscmd [-n ip:port] [-f nodelist]\n");
     return;
 }
@@ -143,9 +141,9 @@ int main(int argc , char *argv[])
         }
         */
         if ( nodeIndex == 0 ){
-            printf("presscmd(全部节点)> ");
+            printf("presscmd(ALL NODES)> ");
         } else {
-            printf("presscmd(节点%d)> " , nodeIndex);
+            printf("presscmd(NODE[%d])> " , nodeIndex);
         }
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
@@ -214,9 +212,9 @@ int main(int argc , char *argv[])
             nodeIndex = atoi(inputLine+5) ;
             if ( nodeIndex <= 0 || nodeIndex > numOfNode ){
                 nodeIndex = 0;
-                printf("切换到全部节点\n" );
+                printf("switch to ALL NODES mode\n" );
             } else {
-                printf("切换到节点[%s:%d]\n" , ip[nodeIndex-1] , port[nodeIndex-1]);
+                printf("switch to node[%s:%d]\n" , ip[nodeIndex-1] , port[nodeIndex-1]);
             }
             continue;
         }
@@ -244,7 +242,7 @@ TAGMONITOR:
                 continue;
             sock_send = socket(AF_INET , SOCK_STREAM , 0);
             if (connect(sock_send , (struct sockaddr*)&servaddr[i] , sizeof(servaddr[i])) < 0){
-                printf("节点%d[%s:%d]连接失败\n" , i+1 , ip[i] , port[i]);
+                printf("connect to node %d[%s:%d] fail\n" , i+1 , ip[i] , port[i]);
                 close(sock_send);
                 continue;
             }
@@ -256,9 +254,9 @@ TAGMONITOR:
             alarm(0);
             signal(SIGALRM , sig_handler);
             if ( memcmp( inputLine , "list" , 4) == 0 ){
-                printf("节点%d[%s:%d]:%s\n" , i+1 , ip[i] , port[i] , buffer);
+                printf("node %d[%s:%d]:%s\n" , i+1 , ip[i] , port[i] , buffer);
             } else {
-                printf("节点%d[%s:%d]\n" , i+1 , ip[i] , port[i]);
+                printf("node %d[%s:%d]\n" , i+1 , ip[i] , port[i]);
 	            printf("%s\n" , buffer);
             }
             close(sock_send);
@@ -266,7 +264,7 @@ TAGMONITOR:
             if( monitor_mode == 1 && i == numOfNode - 1){
                 if ( outflag == 0 ){
                     signal(SIGINT , sig_handler);
-                    printf("输入Control + c 退出...\n");
+                    printf("enter Control + c to quit...\n");
                     sleep(1);
                     system("clear");
                     goto TAGMONITOR;

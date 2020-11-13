@@ -29,7 +29,7 @@ typedef struct message_struct{
 
 #if 0
 union semun {
-   	int              val;    /* Value for SETVAL *///信号量初始值
+   	int              val;    /* Value for SETVAL */
    	struct semid_ds *buf;    /* Buffer for IPC_STAT, IPC_SET */
    	unsigned short  *array;  /* Array for GETALL, SETALL */
    	struct seminfo  *__buf;  /* Buffer for IPC_INFO*/

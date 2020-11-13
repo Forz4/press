@@ -1,33 +1,27 @@
 #include "include/press.h"
 #include "include/log.h"
 
-sigjmp_buf  jmpbuf;             /* 全局跳转结构 */
-char        PIDFILE[200];       /* PIDFILE name*/
-char        CFGPATH[200];
-int         PORT_CMD = 0;       /* 命令监听端口 */
-int         QID_MSG = 0;        /* 报文传输队列 */
-int         HEART_INTERVAL;     /* 心跳时间间隔 */
-char        ENCODING;           /* A代表ascii码，H代表十六进制*/
-int         sock_send = 0;      /* 发送套接字 */
-int         sock_recv = 0;      /* 接收套接字 */
-int         pidSend = 0;        /* 外卡模式下的双工发送子进程ID */
-int         pidRecv = 0;        /* 外卡模式下的双工接收子进程ID */
-int         g_shmid = 0;        /* 共享内存全局状态区ID */
-int         g_mon_shmid = 0;    /* 共享内存实时监控区ID */
-stat_st    *g_stat;             /* 全局状态区指针 */
-monstat_st *g_mon_stat;         /* 实时状态区指针*/
-int         g_mon_semid = 0;    /* 全局信号量用于保护g_mon_shmid*/
-conn_config_st *p_conn_conf = NULL;            /*configs for conn*/
-pack_config_st *p_pack_conf = NULL;            /*configs for pack*/
+sigjmp_buf  jmpbuf;                     /* for long jump                             */
+char        PIDFILE[200];               /* PIDFILE name                              */
+int         PORT_CMD = 0;               /* listen port for command                   */
+int         QID_MSG = 0;                /* message queue for content                 */
+int         HEART_INTERVAL;             /* interval for idle message                 */
+char        ENCODING;                   /* A for Ascii ，H for Hex                   */
+int         sock_send = 0;              /* socket for sending                        */
+int         sock_recv = 0;              /* socket for receiving                      */
+int         pidSend = 0;                /* PID of sending process in JCB mode        */
+int         pidRecv = 0;                /* PID of receiving process in JCB mode      */
+int         g_shmid = 0;                /* share memory id for global status area    */
+int         g_mon_shmid = 0;            /* share memory id for monitor status area   */
+stat_st    *g_stat;                     /* global statsu area pointer                */
+monstat_st *g_mon_stat;                 /* global monitor area pointer               */
+int         g_mon_semid = 0;            /* semophore for g_mon_shmid                 */
+conn_config_st *p_conn_conf = NULL;     /* connection configs pointer                */
+pack_config_st *p_pack_conf = NULL;     /* packing configs pointer                   */
+int         lastTimeSendNum;            /* sent number at last checkpoint            */
+int         lastTimeRecvNum;            /* received number at last checkpoint        */
+struct timeval lastTimeStamp;           /* timestamp of last checkpoint              */
 
-/* for calculating real tps */
-int         lastTimeSendNum;    /* 上次查询时总发送笔数 */
-int         lastTimeRecvNum;    /* 上次查询时总接收笔数 */
-struct timeval lastTimeStamp;   /* 上次查询时的时间戳 */
-
-/*
- * 加载/初始化通讯配置
- * */
 int conn_config_load(conn_config_st *p_conn_conf)
 {
     FILE *fp = NULL;
@@ -40,12 +34,12 @@ int conn_config_load(conn_config_st *p_conn_conf)
     if (p_conn_conf == NULL){
         return -1;
     }
-    /*load connection config*/
+
     memset(pathname , 0x00 , sizeof(pathname));
     sprintf(pathname , "%s/cfg/conn.cfg" , getenv("PRESS_HOME"));
     fp = fopen(pathname , "r");
     if ( fp == NULL ){
-        log_write(SYSLOG , LOGERR , "调用fopen失败，conn.cfg 配置文件未找到");
+        log_write(SYSLOG , LOGERR , "fopen fail ，cannot find config file [%s]" , pathname);
         return -1;
     }
 
@@ -58,14 +52,14 @@ int conn_config_load(conn_config_st *p_conn_conf)
 
         cur = (comm_proc_st *)malloc(sizeof(comm_proc_st));
         if ( cur == NULL ){
-            log_write(SYSLOG , LOGERR , "malloc for comm_proc_st 失败");
+            log_write(SYSLOG , LOGERR , "malloc fail for comm_proc_st");
             fclose(fp);
             return -1;
         }
 
-        /* 类型 */
+        /* TYPE */
         if (get_bracket(line , 1 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第1域[类型]错误");
+            log_write(SYSLOG , LOGERR , "fail to read [TYPE] in conn.cfg");
             fclose(fp);
             return -1;
         }
@@ -73,7 +67,7 @@ int conn_config_load(conn_config_st *p_conn_conf)
 
         /* IP */
         if (get_bracket(line , 2 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第2域[IP]错误");
+            log_write(SYSLOG , LOGERR , "fail to read [IP] from conn.cfg");
             fclose(fp);
             return -1;
         }
@@ -81,7 +75,7 @@ int conn_config_load(conn_config_st *p_conn_conf)
 
         /* 端口 */
         if (get_bracket(line , 3 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第3域[端口]错误");
+            log_write(SYSLOG , LOGERR , "fail to read [PORT] from conn.cfg");
             fclose(fp);
             return -1;
         }
@@ -89,7 +83,7 @@ int conn_config_load(conn_config_st *p_conn_conf)
 
         /* 持久化开关 */
         if (get_bracket(line , 4 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "读取 conn.cfg 的第4域[持久化开关]错误");
+            log_write(SYSLOG , LOGERR , "fail to read [PERSIST] from conn.cfg");
             fclose(fp);
             return -1;
         }
@@ -124,7 +118,7 @@ int conn_config_load(conn_config_st *p_conn_conf)
     }
 
     if ( count == 0 ){
-        log_write(SYSLOG , LOGERR , "conn.cfg 配置文件为空");
+        log_write(SYSLOG , LOGERR , "empty conn.cfg");
         fclose(fp);
         return 0;
     }
@@ -134,9 +128,6 @@ int conn_config_load(conn_config_st *p_conn_conf)
     return 0;
 }
 
-/*
- * 释放通讯配置结构
- * */
 void conn_config_free(conn_config_st *p_conn_conf)
 {
     comm_proc_st *cur , *nex;
@@ -155,19 +146,16 @@ void conn_config_free(conn_config_st *p_conn_conf)
     return ;
 }
 
-/*
- * 启动通讯进程组
- * */
 int conn_start(conn_config_st *p_conn_conf)
 {
     int ret = 0;
-    log_write(SYSLOG , LOGINF , "开始启动通讯模块");
+    log_write(SYSLOG , LOGINF , "starting conn module");
     ret = conn_config_load(p_conn_conf);
     if (ret < 0){
-        log_write(SYSLOG , LOGERR , "无法加载 conn.cfg");
+        log_write(SYSLOG , LOGERR , "fail to load conn.cfg");
         exit(1);
     }
-    log_write(SYSLOG , LOGDBG , "配置文件加载完成");
+    log_write(SYSLOG , LOGINF , "conn.cfg loaded");
 
     comm_proc_st *cur = p_conn_conf->process_head;
 
@@ -178,26 +166,26 @@ int conn_start(conn_config_st *p_conn_conf)
         if ( cur->type == 'R' ){
             ret = conn_receiver_start(cur);
             if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "通讯接收进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                log_write(SYSLOG , LOGERR , "connection process start fail , TYPE[R] , IP[%s] , PORT[%d]",cur->ip , cur->port);
             } else {
-                log_write(SYSLOG , LOGINF , "通讯接收进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                log_write(SYSLOG , LOGINF , "connection process start OK ,  TYPE[R] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                 cur->pid = ret;
             }
 
         } else if ( cur->type == 'S' ){
             ret = conn_sender_start(cur);
             if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "通讯发送进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[S] , IP[%s] , PORT[%d]",cur->ip , cur->port);
             } else {
-                log_write(SYSLOG , LOGINF , "通讯发送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[S] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                 cur->pid = ret;
             }
         } else if ( cur->type == 'J' ){
             ret = conn_jips_start(cur);
             if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "外卡通讯进程启动成功 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[J] , IP[%s] , PORT[%d]",cur->ip , cur->port);
             } else {
-                log_write(SYSLOG , LOGINF , "外卡通讯进程启动失败 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[J] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                 cur->pid = ret;
             }
         } else if ( cur->type == 'X' ){
@@ -205,9 +193,9 @@ int conn_start(conn_config_st *p_conn_conf)
             for ( i = 0 ; i < cur->parallel ; i ++ ){
                 ret = conn_sender_start(cur);
                 if ( ret < 0 ){
-                    log_write(SYSLOG , LOGERR , "短链接通讯进程启动失败 , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                    log_write(SYSLOG , LOGERR , "connection process start OK , TYPE[X] , IP[%s] , PORT[%d]",cur->ip , cur->port);
                 } else {
-                    log_write(SYSLOG , LOGINF , "短链接通讯送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                    log_write(SYSLOG , LOGINF , "connection process start fail ,  TYPE[X] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
                     cur->para_pids[i] = ret;
                 }
             }
@@ -217,9 +205,7 @@ int conn_start(conn_config_st *p_conn_conf)
     p_conn_conf->status = RUNNING;
     return 0;
 }
-/*
- * 启动通讯接收进程
- * */
+
 int conn_receiver_start(comm_proc_st *p_receiver)
 {
     int pid;
@@ -230,72 +216,66 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         return pid;
     }
 
-    log_write(CONLOG , LOGINF , "长链接接收进程启动 , PORT[%d]" , p_receiver->port);
     signal( SIGTERM , conn_receiver_signal_handler);
 
-    /* 服务端套接字 */
     int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
     struct sockaddr_in server_sockaddr;
-    /* 客户端套接字 */
     char buffer[MAX_LINE_LEN];
     struct sockaddr_in client_addr;
     socklen_t socket_len = sizeof(client_addr);
-    /* 发送控制变量 */
     int recvlen = 0;
     int textlen = 0;
     int nTotal = 0;
     int nRead = 0;
     int nLeft = 0;
-    msg_st msgs;
     int nTranlen = 0;
     int ret = 0;
     struct timeval ts;
 
-    /* bind 端口*/
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_port = htons(p_receiver->port);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
-        log_write(CONLOG , LOGERR , "长链接接收进程[%d] bind 失败" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "bind port[%d] fail" , p_receiver->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "长链接接收进程[%d] bind 成功" , p_receiver->port);
+    log_write(CONLOG , LOGINF , "bind port[%d] OK" , p_receiver->port);
 
-    /* 启动监听 */
     if(listen(server_sockfd , 1) == -1){
-        log_write(CONLOG , LOGERR , "长链接接收进程[%d]监听失败" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "listen port[%d] fail" , p_receiver->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "长链接接收进程[%d]监听成功" , p_receiver->port);
+    log_write(CONLOG , LOGINF , "listen port[%d] OK" , p_receiver->port);
 
-    /* 接受远端连接 */
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
-        log_write(CONLOG , LOGERR , "长链接接收进程[%d] accept 失败" , p_receiver->port);
+        log_write(CONLOG , LOGERR , "accept on port[%d] fail" , p_receiver->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "长链接接收进程[%d] accept 成功" , p_receiver->port);
+    log_write(CONLOG , LOGINF , "accept on port[%d] OK" , p_receiver->port);
 
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
-        log_write(CONLOG , LOGERR , "调用shmat失败, id[%d]" , g_mon_shmid);
+        log_write(CONLOG , LOGERR , "shmat for monstat_st fail , shmid[%d]" , g_mon_shmid);
         return -1;
     }
 
     while(1){
         memset(buffer , 0x00 , sizeof(buffer));
-        memset(&msgs , 0x00 , sizeof(msg_st));
 
-        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]开始recv",p_receiver->port);
-        /*read length of transaction*/
+        log_write(CONLOG , LOGDBG , "recv start on port[%d]",p_receiver->port);
         recvlen = recv(sock_recv , buffer , 4 , 0);
         if (recvlen < 0){
+            log_write(CONLOG , LOGERR , "recv returns[%d] on port[%d] , process exit" , recvlen , p_receiver->port);
             break;
         } else if ( strncmp(buffer , "0000" , 4) == 0){
+            log_write(CONLOG , LOGDBG , "recv get 0000 on port[%d]" , p_receiver->port);
             continue;
         } else {
             textlen = atoi(buffer);
+            log_write(CONLOG , LOGDBG , "recv get [%02x%02x%02x%02x],textlen[%d]",
+                    buffer[0],buffer[1],buffer[2],buffer[3],textlen);
             nTotal = 0;
             nRead = 0;
             nLeft = textlen;
@@ -306,24 +286,20 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                 nLeft -= nRead;
             }
         }
-        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]收到报文,textlen[%d]",p_receiver->port,textlen);
 
         sem_lock(g_mon_semid);
         g_mon_stat->recv_num ++;
         sem_unlock(g_mon_semid);
 
-        log_write(CONLOG , LOGDBG , "长链接接收进程[%d]更新接收统计数字完成",p_receiver->port);
-
         if ( p_receiver->persist == 1 ){
             nTranlen = get_length(buffer);
             if ( nTranlen < 0 ){
-                log_write(CONLOG , LOGERR , "长链接接收进程获取响应报文长度失败");
+                log_write(CONLOG , LOGERR , "receive invalid length , fail to persist");
             } else {
-                memcpy(msgs.text , buffer , nTranlen + 4);
                 gettimeofday( &ts , NULL );
                 ret = persist( buffer , nTranlen + 4 , LONG_RECV , ts);
                 if (ret < 0){
-                    log_write(CONLOG , LOGERR , "通讯接收进程调用持久化失败");
+                    log_write(CONLOG , LOGERR , "fail to persist");
                 }
             }
         }
@@ -331,18 +307,14 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     close(sock_recv);
     return 0;
 }
-/*
- * 通讯接收进程信号处理函数
- * */
+
 void conn_receiver_signal_handler(int no)
 {
-    log_write(CONLOG , LOGDBG , "长链接接收进程进入信号处理函数退出");
+    log_write(CONLOG , LOGDBG , "into conn_receiver_signal_handler , signo[%d]" , no);
     close(sock_recv);
     exit(0);
 }
-/*
- * 启动通讯发送进程
- * */
+
 int conn_sender_start(comm_proc_st *p_sender)
 {
     int pid;
@@ -353,7 +325,8 @@ int conn_sender_start(comm_proc_st *p_sender)
         return pid;
     }
 
-    log_write(CONLOG , LOGINF , "通讯发送进程[%c:%s:%d]启动" ,p_sender->type ,  p_sender->ip , p_sender->port);
+    log_write(CONLOG , LOGINF , "sender process start [%c:%s:%d]" ,\
+            p_sender->type ,  p_sender->ip , p_sender->port);
     signal( SIGTERM , conn_sender_signal_handler);
 
     struct sockaddr_in servaddr;
@@ -365,23 +338,20 @@ int conn_sender_start(comm_proc_st *p_sender)
     int nLeft = 0;
     struct timeval ts;
 
-    /* 短链接读使用 */
     int recvlen = 0;
     int textlen = 0;
     int nRead = 0;
     int nTranlen = 0;
     char buffer[MAX_LINE_LEN];
 
-    /* relocate share memory */
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "调用shmat失败,shmid[%d]" , g_mon_shmid);
+        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail ,shmid[%d]" , g_mon_shmid);
         return -1;
     }
 
     int connected = 0;
     while(1){
-        /* 链接 */
         if ( connected == 0 || p_sender->type == 'X' ){
             connected = 1;
             sock_send = socket(AF_INET , SOCK_STREAM , 0);
@@ -399,7 +369,7 @@ int conn_sender_start(comm_proc_st *p_sender)
                 break;
             }
         }
-        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] connect 成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
+        log_write(CONLOG , LOGDBG , "connect OK");
 
         if (HEART_INTERVAL > 0){
             sigsetjmp(jmpbuf , 1);
@@ -407,7 +377,7 @@ int conn_sender_start(comm_proc_st *p_sender)
             alarm(HEART_INTERVAL);
         }
 
-        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] 开始msgrcv" ,p_sender->type ,  p_sender->ip , p_sender->port);
+        log_write(CONLOG , LOGDBG , "start to msgrcv");
 
         ret = msgrcv(    (key_t)QID_MSG , \
                         &msgs , \
@@ -415,14 +385,14 @@ int conn_sender_start(comm_proc_st *p_sender)
                         0, \
                         0 );
         if ( ret < 0 ){
-            log_write(CONLOG , LOGERR , "通讯发送进程调用msgrcv失败,ret[%d],msgid[%d]",ret,QID_MSG);
+            log_write(CONLOG , LOGERR , "msgrcv fail ,ret[%d],msgid[%d]",ret,QID_MSG);
             close(sock_send);
             exit(1);
         }
         if (HEART_INTERVAL > 0){
             alarm(0);
         }
-        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d]从队列读到报文,len[%d]" ,p_sender->type ,  p_sender->ip , p_sender->port , msgs.length);
+        log_write(CONLOG , LOGDBG , "msgrcv OK ,len[%d]" ,msgs.length);
 
         len = msgs.length;
         nTotal = 0;
@@ -434,20 +404,18 @@ int conn_sender_start(comm_proc_st *p_sender)
                 break;
             }
             else if (nSent < 0){
-                log_write(CONLOG , LOGERR , "通讯发送进程调用send失败,nSent[%d],errno[%d]" , nSent , errno);
+                log_write(CONLOG , LOGERR , "send fail,nSent[%d],errno[%d],process exit" , nSent , errno);
                 close(sock_send);
                 exit(0);
             }
             nTotal += nSent;
             nLeft -= nSent;
         }
-        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] send 成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
+        log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
         
         sem_lock(g_mon_semid);
         g_mon_stat->send_num ++;
         sem_unlock(g_mon_semid);
-
-        log_write(CONLOG , LOGDBG , "通讯发送进程[%c:%s:%d] 更新统计发送笔数成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
 
         if ( p_sender->persist == 1 ){
             gettimeofday(&ts , NULL);
@@ -457,23 +425,26 @@ int conn_sender_start(comm_proc_st *p_sender)
                 msgs.type = SHORTCONN;
             ret = persist(msgs.text , msgs.length , msgs.type , ts);
             if (ret < 0){
-                log_write(SYSLOG , LOGERR , "通讯发送进程持久化失败");
+                log_write(SYSLOG , LOGERR , "fail to persist");
             }
         }
         
-/*=========== 短链接的逻辑 ==============*/
         if ( p_sender->type == 'X' ){
-            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] 开始recv" ,p_sender->type ,  p_sender->ip , p_sender->port);
+            log_write(CONLOG , LOGDBG , "start to recv" ,p_sender->type ,  p_sender->ip , p_sender->port);
             memset( buffer , 0x00 , sizeof(buffer) );
             recvlen = recv(sock_send , buffer , 4 , 0);
-            if (recvlen < 0){
-                break;
+            if (recvlen <= 0){
+                log_write(CONLOG , LOGERR , "recv returns[%d] , process exit" ,\
+                        p_sender->type ,  p_sender->ip , p_sender->port , recvlen);
+                close(sock_send);
+                exit(1);
             } else if ( strncmp(buffer , "0000" , 4) == 0){
+                log_write(CONLOG , LOGDBG , "recv get 0000");
                 continue;
             } else {
                 textlen = atoi(buffer);
-                log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d] recv成功,buffer[%02x|%02x|%02x|%02x]" ,\
-                    p_sender->type,p_sender->ip,p_sender->port,buffer[0],buffer[1],buffer[2],buffer[3]);
+                log_write(CONLOG , LOGDBG , "recv length OK ,buffer[%02x|%02x|%02x|%02x]" ,\
+                    buffer[0],buffer[1],buffer[2],buffer[3]);
                 nTotal = 0;
                 nRead = 0;
                 nLeft = textlen;
@@ -489,38 +460,29 @@ int conn_sender_start(comm_proc_st *p_sender)
             g_mon_stat->recv_num ++;
             sem_unlock(g_mon_semid);
 
-            log_write(CONLOG , LOGDBG , "短链接接受进程[%c:%s:%d]更新统计数字成功" ,p_sender->type ,  p_sender->ip , p_sender->port);
-
             if ( p_sender->persist == 1 ){
                 nTranlen = get_length(buffer);
                 if ( nTranlen < 0 ){
-                    log_write(CONLOG , LOGERR , "短链接接收进程获取响应报文长度失败" );
+                    log_write(CONLOG , LOGERR , "persist fail" );
                 } else {
                     gettimeofday( &ts , NULL );
                     ret = persist(buffer , nTranlen + 4 , SHORTCONN , ts);
                     if (ret < 0){
-                        log_write(CONLOG , LOGERR , "通讯接收进程持久化失败" );
+                        log_write(CONLOG , LOGERR , "persist fail" );
                     }
                 }
             }
             close( sock_send );
         }
-/*=========== 短链接的逻辑 ==============*/
     }
     close(sock_send);
     return 0;
 }
-/* 
- * 通讯发送进程信号处理函数
- * */
 void conn_sender_signal_handler(int no)
 {
     close(sock_send);
     exit(0);
 }
-/*
- * 启动外卡通讯进程
- * */
 int conn_jips_start(comm_proc_st *p_jips)
 {
     int pid;
@@ -531,16 +493,13 @@ int conn_jips_start(comm_proc_st *p_jips)
         return pid;
     }
 
-    log_write(CONLOG , LOGINF , "外卡通讯进程[%d]启动" , p_jips->port);
+    log_write(CONLOG , LOGINF , "connection process start on port [%d]" , p_jips->port);
 
-    /* 服务端套接字 */
     int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
     struct sockaddr_in server_sockaddr;
-    /* 客户端套接字 */
     char buffer[MAX_LINE_LEN];
     struct sockaddr_in client_addr;
     socklen_t socket_len = sizeof(client_addr);
-    /* 发包控制变量 */
     int len = 0;
     char lenAscii[5];
     int recvlen = 0;
@@ -553,37 +512,35 @@ int conn_jips_start(comm_proc_st *p_jips)
     int ret = 0;
     struct timeval ts;
 
-    /*bind listen accectp*/
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_port = htons(p_jips->port);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
-        log_write(CONLOG , LOGERR , "外卡通讯进程[%d] bind 失败" , p_jips->port);
+        log_write(CONLOG , LOGERR , "bind port[%d] fail" , p_jips->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] bind 成功" , p_jips->port);
+    log_write(CONLOG , LOGINF , "bind port[%d] OK" , p_jips->port);
 
     if(listen(server_sockfd , 1) == -1){
-        log_write(CONLOG , LOGERR , "外卡通讯进程[%d] listen 失败" , p_jips->port);
+        log_write(CONLOG , LOGERR , "listen on port[%d] fail" , p_jips->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] listen 成功" , p_jips->port);
+    log_write(CONLOG , LOGINF , "listen on port[%d] OK" , p_jips->port);
 
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
-        log_write(SYSLOG , LOGERR , "外卡通讯进程[%d] accept 失败" , p_jips->port);
+        log_write(SYSLOG , LOGERR , "accept on port[%d] fail" , p_jips->port);
         exit(1);
     }
-    log_write(CONLOG , LOGDBG , "外卡通讯进程[%d] accept 成功" , p_jips->port);
+    log_write(CONLOG , LOGINF , "accept on port[%d] OK" , p_jips->port);
 
     /* start receiving process */
     pidRecv = fork();
     if ( pidRecv == 0 ){
-        log_write(CONLOG , LOGINF , "外卡通讯进程[%d] 接收子进程启动" , p_jips->port);
         g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
         if ( g_mon_stat == NULL ){
-            log_write(CONLOG , LOGERR , "外卡通讯进程调用shmat失败 , shmid[%d]" , g_mon_shmid);
+            log_write(CONLOG , LOGERR , "shmat for monstat_st fail , shmid[%d]" , g_mon_shmid);
             return -1;
         }
 
@@ -591,14 +548,18 @@ int conn_jips_start(comm_proc_st *p_jips)
             memset(buffer , 0x00 , sizeof(buffer));
             memset(&msgs , 0x00 , sizeof(msg_st));
 
-            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]接收子进程开始recv" , p_jips->port);
+            log_write(CONLOG , LOGDBG , "start to recv");
             recvlen = recv(sock_recv , buffer , 4 , 0);
-            if (recvlen < 0){
-                break;
+            if (recvlen <= 0){
+                log_write(CONLOG , LOGERR , "recv returns[%d] , process exit" , recvlen);
+                close(sock_recv);
+                exit(1);
             } else if ( strncmp(buffer , "0000" , 4) == 0){
+                log_write(CONLOG , LOGDBG , "recv 0000");
                 continue;
             } else {
                 textlen = buffer[2]*16*16*16 + buffer[3]*16*16+ buffer[0]*16 + buffer[1]*1 ;
+                log_write(CONLOG , LOGDBG , "recv length %d]" , textlen);
                 nTotal = 0;
                 nRead = 0;
                 nLeft = textlen;
@@ -610,7 +571,7 @@ int conn_jips_start(comm_proc_st *p_jips)
                 }
             }
 
-            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]接收子进程收到报文,textlen[%d]" , p_jips->port , textlen);
+            log_write(CONLOG , LOGDBG , "recv OK ,textlen[%d]" , p_jips->port , textlen);
             
             sem_lock(g_mon_semid);
             g_mon_stat->recv_num ++;
@@ -625,18 +586,17 @@ int conn_jips_start(comm_proc_st *p_jips)
                 gettimeofday( &ts , NULL );
                 ret = persist( msgs.text , textlen + 4 , JIPSCONN , ts);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
+                    log_write(SYSLOG , LOGERR , "persist fail");
                 }
             }
         }
     } else if ( pidRecv < 0 ){
-        return -1;
+         return -1;
     }
 
     /* start jips sender process */
     pidSend = fork();
     if ( pidSend == 0 ){
-        log_write(CONLOG , LOGINF , "外卡通讯进程[%d]发送子进程启动" , p_jips->port);
         while(1){
             if (HEART_INTERVAL > 0){
                 sigsetjmp(jmpbuf , 1);
@@ -654,7 +614,7 @@ int conn_jips_start(comm_proc_st *p_jips)
             
             len = get_length(msgs.text);
 
-            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]发送子进程读取到报文,len[%d]" , p_jips->port , len);
+            log_write(CONLOG , LOGDBG , "msgrcv OK , len[%d]"  , len);
 
             nTotal = 4;
             nSent = 0;
@@ -665,14 +625,14 @@ int conn_jips_start(comm_proc_st *p_jips)
                     break;
                 }
                 else if (nSent < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程调用send失败,nSentt[%d],errno[%d]",nSent,errno);
+                    log_write(SYSLOG , LOGERR , "send fail,nSentt[%d],errno[%d]",nSent,errno);
                     close(sock_recv);
                     exit(0);
                 }
                 nTotal += nSent;
                 nLeft -= nSent;
             }
-            log_write(CONLOG , LOGDBG , "外卡通讯进程[%d]发送子进程发送报文成功,len[%d]" , p_jips->port , len);
+            log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
 
             sem_lock(g_mon_semid);
             g_mon_stat->send_num ++;
@@ -682,7 +642,7 @@ int conn_jips_start(comm_proc_st *p_jips)
                 gettimeofday(&ts , NULL);
                 ret = persist(msgs.text , msgs.length+4 , JIPSCONN , ts);
                 if (ret < 0){
-                    log_write(SYSLOG , LOGERR , "外卡通讯进程持久化失败");
+                    log_write(SYSLOG , LOGERR , "persist fail");
                 }
             }
         }
@@ -694,33 +654,31 @@ int conn_jips_start(comm_proc_st *p_jips)
     /*parent sleep and wait for signal */
     close(sock_recv);
     signal( SIGTERM , conn_jips_signal_handler);
-    log_write(CONLOG , LOGINF , "外卡通讯发送进程启动成功 , pidSend[%d]" , pidSend);
-    log_write(CONLOG , LOGINF , "外卡通讯接收进程启动成功 , pidRecv[%d]" , pidRecv);
+    log_write(CONLOG , LOGINF , "starting children started , pidSend[%d]" , pidSend);
+    log_write(CONLOG , LOGINF , "receiving children startd  , pidRecv[%d]" , pidRecv);
     
     while(1){
         sleep(10);
         if ( kill( pidRecv , 0 ) == 0 && kill( pidSend , 0) == 0 ){
-            log_write(CONLOG , LOGINF , "外卡通讯进程工作正常 port[%d], pidRecv[%d] , pidSend[%d]" , p_jips->port , pidRecv , pidSend);
+            log_write(CONLOG , LOGINF , "status check OK , port[%d], pidRecv[%d] , pidSend[%d]" , p_jips->port , pidRecv , pidSend);
             continue;
         } else {
             kill( pidRecv , 9);
             kill( pidSend , 9);
-            log_write(CONLOG , LOGERR , "外卡通讯进程工作异常，强行退出进程pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
+            log_write(CONLOG , LOGERR , "status check fail ，killing pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
             exit(-1);
         }
     }
 }
-/*
- * 外卡通讯进程信号处理函数
- * */
+
 void conn_jips_signal_handler(int signo)
 {
     kill( pidRecv , SIGTERM);
     kill( pidSend , SIGTERM);
-    log_write(CONLOG , LOGINF , "外卡通讯进程退出, pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
+    log_write(CONLOG , LOGINF , "killing pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
     exit(0);
 }
-/* 停止通讯模块 */
+
 int conn_stop(conn_config_st *p_conn_conf)
 {
     comm_proc_st *cur;
@@ -731,25 +689,27 @@ int conn_stop(conn_config_st *p_conn_conf)
 
     cur = p_conn_conf->process_head;
     while (cur != NULL){
-        log_write(SYSLOG , LOGINF , "停止通讯进程 pid[%d]", cur->pid);
         if ( cur->type == 'X' ){
             int i = 0;
             for ( i = 0 ;i < cur->parallel ; i ++ ){
-                if (cur->para_pids[i] > 0 )
+                if (cur->para_pids[i] > 0 ){
                     kill(cur->para_pids[i] , SIGTERM);
+                    log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
+                }
             }
         } else {
-            if ( cur->pid > 0 )
+            if ( cur->pid > 0 ){
                 kill(cur->pid , SIGTERM);
+                log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
+            }
+
         }
         cur=cur->next;
     }
     p_conn_conf->status = NOTLOADED;
     return 0;
 }
-/*
- * 加载组包进程配置
- * */
+
 int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 {
     char     config_fn[MAX_FILENAME_LEN];
@@ -759,7 +719,6 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     int     count = 0;
     char     pathname[MAX_PATHNAME_LEN];
 
-    log_write(SYSLOG , LOGINF , "开始加载组包进程配置");
     p_pack_conf->pit_head = NULL;
     pit_proc_st    *pit_cur = NULL;
     memset(config_fn , 0x00 , sizeof(config_fn));
@@ -773,7 +732,7 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     sprintf(pathname , "%s/cfg/%s" , getenv("PRESS_HOME") , filename);
     fp = fopen(pathname , "r");
     if ( fp == NULL ){
-        log_write(SYSLOG , LOGERR , "组包进程配置文件[%s]未找到" , filename);
+        log_write(SYSLOG , LOGERR , "cannot find packing config file[%s]" , filename);
         return -1;
     }
 
@@ -782,11 +741,11 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         if ( line[0] == '\n' || line[0] == '#' )
             continue;
 
-        log_write(SYSLOG , LOGDBG , "pack.cfg 记录[%s]" , line);
+        log_write(SYSLOG , LOGDBG , "read pack.cfg line[%s]" , line);
 
         pit_cur = (pit_proc_st *)malloc(sizeof(pit_proc_st));
         if ( pit_cur == NULL ){
-            log_write(SYSLOG , LOGERR , "内部错误:malloc for pit_proc_st失败");
+            log_write(SYSLOG , LOGERR , "malloc for pit_proc_st fail");
             fclose(fp);
             return -1;
         }
@@ -795,11 +754,11 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 
         /* get tpl file */
         if (get_bracket(line , 1 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg第1域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in filed1[tplfilename]");
             fclose(fp);
             return -1;
         }
-        log_write(SYSLOG , LOGDBG , "读取第1域模板文件名[%s]" ,buf );
+        log_write(SYSLOG , LOGDBG , "read tplfilename[%s]" ,buf );
 
         strcpy(pit_cur->tplFileName , buf);
 
@@ -807,44 +766,44 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         sprintf(pathname , "%s/data/tpl/%s" , getenv("PRESS_HOME") , buf);
         pit_cur->tpl_fp = fopen(pathname , "r");
         if ( pit_cur->tpl_fp == NULL ){
-            log_write(SYSLOG , LOGERR , "无法找到模板文件[%s]",pathname);
+            log_write(SYSLOG , LOGERR , "cannnot find tpl file [%s]",pathname);
             fclose(fp);
             return -1;
         }
 
         /* get rule */
         if (get_bracket(line , 2 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg第2域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in filed2[rule file]");
             fclose(fp);
             return -1;
         }
-        log_write(SYSLOG , LOGDBG , "读取第2域替换规则文件名[%s]" ,buf );
+        log_write(SYSLOG , LOGDBG , "read fule filename[%s]" ,buf );
         memset(pathname , 0x00 , sizeof(pathname));
         sprintf(pathname , "%s/data/rule/%s" , getenv("PRESS_HOME") , buf);
         pit_cur->rule_fp = fopen(pathname , "r");
         if ( pit_cur->rule_fp == NULL ){
-            log_write(SYSLOG , LOGERR , "无法找到替换规则文件[%s]",pathname);
+            log_write(SYSLOG , LOGERR , "cannot find rule file[%s]",pathname);
             fclose(fp);
             return -1;
         }
 
         /*get tps*/
         if (get_bracket(line , 3 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg第3域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in filed3[tps]");
             fclose(fp);
             return -1;
         }
         pit_cur->tps = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "读取第3域tps[%d]" ,pit_cur->tps );
+        log_write(SYSLOG , LOGDBG , "read tps[%d]" ,pit_cur->tps );
 
         /* get time */
         if (get_bracket(line , 4 , buf , 100)){
-            log_write(SYSLOG , LOGERR , "pack.cfg第4域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in filed4[time]");
             fclose(fp);
             return -1;
         }
         pit_cur->time = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "读取第4域发送时间time[%d]" ,pit_cur->time );
+        log_write(SYSLOG , LOGDBG , "read time[%d]" ,pit_cur->time );
 
         /* get qid */
         count ++;
@@ -854,19 +813,18 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     }
 
     if ( count == 0 ){
-        log_write(SYSLOG , LOGERR , "组包配置文件为空");
+        log_write(SYSLOG , LOGERR , "empty pack.cfg");
         fclose(fp);
         return 0;
     }
 
     fclose(fp);
-    log_write(SYSLOG , LOGDBG , "组包配置文件已加载");
+    log_write(SYSLOG , LOGDBG , "packing config loaded");
     return 0;
 }
 
 int pack_config_free(pack_config_st *p_pack_conf)
 {
-    log_write(SYSLOG , LOGDBG , "开始清理组包配置");
     pack_config_st *cur = p_pack_conf;
     pit_proc_st *pit_cur = NULL;
     pit_proc_st *pit_del = NULL;
@@ -875,7 +833,7 @@ int pack_config_free(pack_config_st *p_pack_conf)
         return 0;
     }
     pit_cur = cur->pit_head;
-    /*文件指针的关闭放在子进程中*/
+
     while ( pit_cur != NULL ){
         pit_del = pit_cur;
         pit_cur = pit_cur->next;
@@ -885,7 +843,6 @@ int pack_config_free(pack_config_st *p_pack_conf)
             free(pit_del);
     }
 
-    log_write(SYSLOG , LOGDBG ,  "清理组包配置完成");
     return 0;
 }
 
@@ -905,7 +862,6 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
     } else {
         strcpy(buf , msg+i);
     }
-    log_write(SYSLOG , LOGINF , "开始加载组包配置文件%s" , buf);
 
     ret = pack_config_load( buf , p_pack_conf );
     if ( ret ){
@@ -923,7 +879,6 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
     lastTimeRecvNum = 0;
     memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
 
-    log_write(SYSLOG , LOGINF , "组包配置文件加载完成 " );
     return 0;
 }
 
@@ -933,7 +888,7 @@ int pack_send(pack_config_st *p_pack_conf)
     /* start pitchers */
     while ( cur != NULL ) {
         cur->pid = pack_pit_start(cur);
-        log_write(SYSLOG , LOGINF , "组包进程启动,PID[%d]" ,cur->pid);
+        log_write(SYSLOG , LOGINF , "packing process start,PID[%d]" ,cur->pid);
         cur = cur->next;
     }
     p_pack_conf->status = RUNNING;
@@ -951,7 +906,7 @@ int pack_shut(pack_config_st *p_pack_conf)
             kill(pit_cur->pid , SIGTERM);
             l_stat = g_stat+pit_cur->index;
             l_stat->tag = FINISHED;
-            log_write(SYSLOG , LOGINF , "停止组包进程,pid[%d]" , pit_cur->pid);
+            log_write(SYSLOG , LOGINF , "packing process stop,pid[%d]" , pit_cur->pid);
         }
         pit_cur = pit_cur->next;
     }
@@ -989,14 +944,13 @@ int pack_pit_start(pit_proc_st *p_pitcher)
         return pid;
     }
 
-    log_write(PCKLOG , LOGINF , "组包进程[%s]启动" , p_pitcher->tplFileName);
+    log_write(PCKLOG , LOGINF , "packing process start[%s]" , p_pitcher->tplFileName);
     /* relocate share memory */
     g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
     if ( g_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "shmat fail");
+        log_write(SYSLOG , LOGERR , "shmat for stat_st fail");
         return -1;
     }
-    log_write(PCKLOG , LOGDBG , "shmat OK , g_stat = %u" , g_stat);
 
     tpl_st mytpl;
     rule_st *ruleHead = NULL;
@@ -1011,7 +965,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     struct timeval tv_interval;
     struct timeval tv_begin;
     int timeIntervalUs = 1000000 / p_pitcher->tps;
-    /* F7计算 */
+
     time_t t;
     struct tm* lt;
 
@@ -1022,25 +976,25 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     /* load template */
     memset(&mytpl , 0x00 , sizeof(mytpl));
     if (get_template(p_pitcher->tpl_fp , &mytpl)){
-        log_write(PCKLOG , LOGERR , "加载模板文件内容失败");
+        log_write(PCKLOG , LOGERR , "load tpl file fail");
         fclose(p_pitcher->tpl_fp);
         exit(-1);
     }
-    log_write(PCKLOG , LOGDBG , "模板文件加载完毕");
+    log_write(PCKLOG , LOGDBG , "tpl file loaded");
     /* load rules */
     ruleHead = get_rule(p_pitcher->rule_fp);
     if (ruleHead == NULL){
-        log_write(PCKLOG , LOGERR , "加载替换规则文件失败");
+        log_write(PCKLOG , LOGERR , "load rule file fail");
         fclose(p_pitcher->rule_fp);
         exit(-1);
     }
-    log_write(PCKLOG , LOGDBG , "替换规则文件加载完毕");
+    log_write(PCKLOG , LOGDBG , "load file loaded");
 
     msgs.type = 1;
     msgs.length = mytpl.len + 4;
     gettimeofday(&tv_begin,NULL);
     while( l_stat->left_num > 0 ){
-        log_write(PCKLOG , LOGDBG , "组包开始");
+        log_write(PCKLOG , LOGDBG , "start to pack");
         gettimeofday(&tv_start,NULL);
         memset(msgs.text , 0x00 , sizeof(msgs.text));
         memcpy(msgs.text , mytpl.text , mytpl.len + 4);
@@ -1062,14 +1016,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
             currule = currule->next;
         }
-        log_write(PCKLOG , LOGDBG , "组包完成,准备发送至报文队列");
+        log_write(PCKLOG , LOGDBG , "pack OK , prepare to send to queue");
         /* send to out queue */
         ret = msgsnd((key_t)QID_MSG , &msgs , sizeof(msg_st) - sizeof(long) , 0);
         if (ret < 0){
-            log_write(PCKLOG , LOGERR , "内部错误:组包进程调用msgsnd失败，ret[%d],errno[%d]",ret,errno);
+            log_write(PCKLOG , LOGERR , "msgsnd fail，ret[%d],errno[%d]",ret,errno);
             exit(1);
         }
-        log_write(PCKLOG , LOGDBG , "报文发送完成");
+        log_write(PCKLOG , LOGDBG , "package sent to queue");
         /* update share memory*/
         gettimeofday(&tv_now,NULL);
         timersub(&tv_now , &tv_begin , &tv_interval);
@@ -1105,7 +1059,7 @@ int persist(char *text , int len , char type , struct timeval ts)
         sprintf(pathname , "%s/data/result/jipsconn_%d" , getenv("PRESS_HOME") , getpid());
     fp = fopen(pathname , "a+");
     if (fp == NULL){
-        log_write(CONLOG , LOGERR , "内部错误:无法打开持久化结果文件[%s]",pathname);
+        log_write(CONLOG , LOGERR , "cannot open file [%s]",pathname);
         return -1;
     }
 
@@ -1144,12 +1098,10 @@ int persist(char *text , int len , char type , struct timeval ts)
         fwrite("\n" , 1, 1 , fp);
     }
     fclose(fp);
-    log_write(CONLOG , LOGDBG , "持久化成功");
+    log_write(CONLOG , LOGDBG , "persist OK");
     return 0;
 }
-/*
- * 初始化信号量
- * */
+
 int sem_init()
 {
     int semid = 0;
@@ -1158,41 +1110,30 @@ int sem_init()
 
     semid = semget(IPC_PRIVATE , 1 , IPC_CREAT|0660);
     if ( semid < 0 ){
-        log_write(SYSLOG , LOGERR , "semget失败");
+        log_write(SYSLOG , LOGERR , "semget fail , semid[%d] , errno[%d]" , semid , errno);
         return -1;
     }
     arg.val = 1;
     ret = semctl( semid , 0 , SETVAL , arg);
     if ( ret < 0 ){
-        log_write(SYSLOG , LOGERR , "调用semctl失败");
+        log_write(SYSLOG , LOGERR , "semctl fail , ret[%d] , errno[%d]" , ret , errno);
         return -1;
     }
     return semid;
 }
-/*
- * 销毁信号量
- * */
-void sem_destroy(int semid)
-{
-    return ;
-}
-/*
- * 上锁操作
- * */
+
 int sem_lock(int semid)
 {
     struct sembuf sops={0,-1, SEM_UNDO};
     return (semop(semid,&sops,1));
 }
-/* 解锁操作 */
+
 int sem_unlock(int semid)
 {
     struct sembuf sops={0,+1, SEM_UNDO};
     return (semop(semid,&sops,1));
 }
-/* 
- * 发送空闲包
- * */
+
 void send_idle(int signo)
 {
     send(sock_send , "0000" , 4 , 0);
@@ -1201,13 +1142,13 @@ void send_idle(int signo)
 
 rule_st *get_rule(FILE *fp)
 {
-    char     line[150];
-    char     buf[100];
-    char     pathname[MAX_PATHNAME_LEN];
+    char      line[150];
+    char      buf[100];
+    char      pathname[MAX_PATHNAME_LEN];
 
-    char     temp[MAX_LINE_LEN];
-    char    replace[MAX_REP_LEN];
-    FILE     *rep_fp = NULL;
+    char      temp[MAX_LINE_LEN];
+    char      replace[MAX_REP_LEN];
+    FILE      *rep_fp = NULL;
     rep_st    *rep_head = NULL;
     rep_st    *rep_tail = NULL;
     rep_st    *rep_cur = NULL;
@@ -1218,7 +1159,7 @@ rule_st *get_rule(FILE *fp)
     memset(line , 0x00 , sizeof(line));
     memset(buf , 0x00 , sizeof(buf));
 
-    log_write(SYSLOG , LOGDBG , "开始加载替换规则");
+    log_write(SYSLOG , LOGINF , "start to load rule file");
 
     while( fgets(line , sizeof(line) , fp) != NULL ){
 
@@ -1227,51 +1168,45 @@ rule_st *get_rule(FILE *fp)
 
         cur = (rule_st *)malloc(sizeof(rule_st));
         if ( cur == NULL ){
-            log_write(SYSLOG , LOGERR , "内部错误:malloc for rule_st失败");
+            log_write(SYSLOG , LOGERR , "malloc for rule_st fail");
             fclose(fp);
             return NULL;
         }
 
         memset(cur , 0x00 , sizeof(rule_st));
 
-        /*第一域为替换起始位置*/
         if (get_bracket(line , 1 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "替换规则文件第1域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in field1[start position]");
             return NULL;
         }
         cur->start = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "读取替换规则第1域，起始位置[%d]" , cur->start);
+        log_write(SYSLOG , LOGINF , "read start position[%d]" , cur->start);
 
-        /* 第二域为替换长度*/
         if (get_bracket(line , 2 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "替换规则文件第2域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in field2[substution length]");
             return NULL;
         }
         cur->length = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "读取替换规则第2域，替换长度[%d]" , cur->length);
+        log_write(SYSLOG , LOGINF , "read substution length[%d]" , cur->length);
 
-        /* 第三域为补位方式*/
         if (get_bracket(line , 3 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "替换规则文件第3域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in field3[padding mode]");
             return NULL;
         }
         cur->pad = atoi(buf);
-        log_write(SYSLOG , LOGDBG , "读取替换规则第3域，补位方式[%d]" , cur->pad);
+        log_write(SYSLOG , LOGINF , "read padding mode[%d]" , cur->pad);
 
-        /* 第四域为替换方式*/
         if (get_bracket(line , 4 , buf , 100))
         {
-            log_write(SYSLOG , LOGERR , "替换规则文件第4域格式错误");
+            log_write(SYSLOG , LOGERR , "format error in field4[substution mode]");
             return NULL;
         }
         if ( strncmp( buf , "RAND" , 4 ) == 0  ){
-            /* 类型1: 随机数 */
             cur->type = REPTYPE_RANDOM;
         } else if ( strncmp( buf , "FILE:" , 5) == 0 ){
-            /* 类型2: 文件 */
             cur->type = REPTYPE_FILE;
             memset(pathname , 0x00 , sizeof(pathname));
             sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+5);
@@ -1317,29 +1252,28 @@ rule_st *get_rule(FILE *fp)
             }
             fclose(rep_fp);
         } else if ( strncmp( buf , "F7" , 2) == 0 ){
-            /* 类型3: 7域 */
             cur->type = REPTYPE_F7;
         }
-        log_write(SYSLOG , LOGDBG , "读取替换规则第5域，替换方式[%d]" , cur->type);
+        log_write(SYSLOG , LOGINF , "read substution mode[%d]" , cur->type);
 
         cur->rep_head = rep_head;
 
         cur->next = ret;
         ret = cur;
     }
-    log_write(SYSLOG , LOGDBG , "替换规则加载完成");
+    log_write(SYSLOG , LOGINF , "rule file loaded");
     return ret;
 }
 
 int get_template(FILE *fp_tpl , tpl_st *mytpl)
 {
     if ( fread(mytpl->text , 1 , 4 , fp_tpl) < 4){
-        log_write(SYSLOG , LOGERR , "读取模板报文4位长度失败");
+        log_write(SYSLOG , LOGERR , "fail to read first 4 bytes from tpl file");
         return -1;
     }
     mytpl->len = get_length(mytpl->text);
     if ( fread(mytpl->text + 4 , 1 , mytpl->len , fp_tpl) < mytpl->len ){
-        log_write(SYSLOG , LOGERR , "读取模板报文内容失败");
+        log_write(SYSLOG , LOGERR , "fail to read tpl file , length[%d]" , mytpl->len);
         return -1;
     }
     return 0;
@@ -1384,11 +1318,11 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
     if ( (flag & STAT_CONN) ){
         if ( p_conn_conf->status == RUNNING ){
             offset += sprintf(ret+offset , \
-                    "通讯进程状态\n");
+                    "CONNECTION PROCESS STATUS\n");
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[类型][IP             ][端口  ][状态   ]\n");
+                    "[TYPE][IP             ][PORT  ][STATUS  ]\n");
             while ( p_comm != NULL ){
                 memset( status , 0x00 , sizeof(status));
                 memset( type , 0x00 , sizeof(type));
@@ -1403,20 +1337,13 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                     sprintf(status , "%-3d/%-3d" , count , p_comm->parallel);
                 } else {
                     if ( kill( p_comm->pid , 0 ) == 0 ){
-                        strcpy(status , "运行中  ");
+                        strcpy(status , "RUNNING ");
                     } else {
-                        strcpy(status , "已退出  ");
+                        strcpy(status , "QUIT    ");
                     }
                 }
-                if ( p_comm->type == 'S' ){
-                    strcpy(type , "发送");
-                } else if ( p_comm->type == 'R' ){
-                    strcpy(type , "接收");
-                } else if ( p_comm->type == 'J' ){
-                    strcpy(type , "外卡");
-                } else if ( p_comm->type == 'X' ){
-                    strcpy(type , "短链");
-                }
+
+                type[0] = p_comm->type;
 
                 offset += sprintf(ret+offset , 
                                 "[%-4s][%-15s][%-6d][%-7s]\n" , \
@@ -1429,30 +1356,30 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
         } else {
-            offset += sprintf(ret+offset , "无通讯模块进程信息,输入init启动通讯模块\n");
+            offset += sprintf(ret+offset , "NO CONNECTION PROCESS,ENTER init TO START CONNECTION MODULE\n");
         }
     }
     if ( (flag & STAT_PACK) ){
         if ( p_pack_conf->status == LOADED || p_pack_conf->status == RUNNING ) {
             offset += sprintf(ret+offset , \
-                    "组包进程状态\n");
+                    "PACKING PROCESS STATUS\n");
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[序号 ][模板文件   ][状态      ][设置速度][已发送报文数][已发送时间/总时间]\n");
+                    "[INDEX][TPLFILE    ][STATUS     ][TPS     ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
             while ( p_pack != NULL ) {
                 l_stat = g_stat + p_pack->index;
                 memset( status , 0x00 , sizeof(status));
                 if ( l_stat->tag != NOTLOADED ){
                     if ( l_stat->tag == RUNNING ){
-                        strcpy(status , "运行中    ");
+                        strcpy(status , "RUNNING    ");
                     } else if ( l_stat->tag == LOADED ){
-                        strcpy(status , "配置已加载");
+                        strcpy(status , "CONF LOADED");
                     } else if ( l_stat->tag == FINISHED ){
-                        strcpy(status , "发送完毕  ");
+                        strcpy(status , "ALL SENT   ");
                     }
                     offset += sprintf(ret+offset , \
-                                    "[%-5d][%-11s][%-10s][%-8d][%-12d][%-8d/%-8d]\n" , \
+                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d]\n" , \
                                     p_pack->index,\
                                     p_pack->tplFileName,\
                                     status,\
@@ -1466,17 +1393,17 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
         } else {
-            offset += sprintf(ret+offset , "无组包进程信息,输入load载入组包配置\n");
+            offset += sprintf(ret+offset , "NO PACKING PROCESS, ENTER load TO LOAD CONFIGS\n");
         }
     }
     if ( flag & STAT_MONI ){
         if ( p_pack_conf->status == RUNNING ) {
             offset += sprintf(ret+offset , \
-                    "实时监控数据\n");
+                    "REAL TIME MONITOR\n");
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[发送总笔数][接收总笔数][发送速度][接收速度]\n");
+                    "[PACKAGE SENT][PACKAGE RECV][TPS SENT][TPS RECV]\n");
             gettimeofday(&nowTimeStamp,NULL);
             timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
             memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
@@ -1489,7 +1416,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             }
             lastTimeRecvNum = g_mon_stat->recv_num;
             offset += sprintf(ret+offset , \
-                    "[%-10d][%-10d][%-8d][%-8d]\n", \
+                    "[%-12d][%-12d][%-8d][%-8d]\n", \
                     g_mon_stat->send_num,\
                     g_mon_stat->recv_num,\
                     g_mon_stat->real_send_tps,\
@@ -1499,7 +1426,7 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                     "===========================================================================\n");
 
         } else {
-            offset += sprintf(ret+offset , "无实时监控信息");
+            offset += sprintf(ret+offset , "NO REAL TIME MONITOR");
         }
     }
 
@@ -1544,13 +1471,13 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     for ( ; i < strlen(msg) ; i ++){
         if ( msg[i] == ' ' || msg[i] == '%' ){
             if ( adjustment == 0 && direc != 0 ){
-                offset += sprintf(ret+offset , "[%s]命令格式错误,缺少数字",msg);
+                offset += sprintf(ret+offset , "[%s]command format error , lacking number",msg);
                 return ret;
             }
             break;
         }
         if ( msg[i] < '0' || msg[i] > '9' ){
-            offset += sprintf(ret+offset , "[%s]命令格式错误,监测到非数字",msg);
+            offset += sprintf(ret+offset , "[%s]command format error , non-number detacted",msg);
             return ret;
         }
         adjustment*=10;
@@ -1558,7 +1485,7 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     }
     if ( msg[i] == '%' ){
         if ( direc == 0 ){
-            offset += sprintf(ret+offset , "[%s]命令格式错误,shiyong%%未指定+-",msg);
+            offset += sprintf(ret+offset , "[%s]command format error , lack +/-",msg);
             return ret;
         } else {
             percent = 1;
@@ -1586,16 +1513,16 @@ char *adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     if ( id >= 0 ){
         status_op(flag , id , adjustment , percent , direc , &before , &after);
         if ( flag == 1 )
-            offset += sprintf(ret+offset , "序号[%d]组包进程TPS调整成功,调整前[%d],调整后[%d]" , id , before , after);
+            offset += sprintf(ret+offset , "alter packing process[%d] TPS from [%d] to [%d] OK" , id , before , after);
         else
-            offset += sprintf(ret+offset , "序号[%d]组包进程发送时间调整成功,调整前[%d],调整后[%d]" , id , before , after);
+            offset += sprintf(ret+offset , "alter packing process[%d] TIME from [%d] to [%d] OK" , id , before , after);
     } else {
         while ( p_pack != NULL ){
             status_op(flag , p_pack->index , adjustment , percent , direc , &before , &after);
             if ( flag == 1 )
-                offset += sprintf(ret+offset , "序号[%d]组包进程TPS调整成功,调整前[%d],调整后[%d]\n" , p_pack->index , before , after);
+                offset += sprintf(ret+offset , "alter packing process[%d] TPS from [%d] to [%d] OK\n" , p_pack->index , before , after);
             else
-                offset += sprintf(ret+offset , "序号[%d]组包进程发送时间调整成功,调整前[%d],调整后[%d]\n" , p_pack->index , before , after);
+                offset += sprintf(ret+offset , "alter packing process[%d] TPS from [%d] to [%d] OK\n" , p_pack->index , before , after);
             p_pack = p_pack->next;
         }
     }
@@ -1622,27 +1549,27 @@ char *adjust_para( char *msg , conn_config_st *p_conn_config)
     }
     
     if ( new_para == shortconn->parallel ){
-        offset = sprintf( ret+offset , "输入短链接并发数与当前并发数相同");
+        offset = sprintf( ret+offset , "same parallel number");
     } else if ( new_para > shortconn->parallel ){
         for ( i = shortconn->parallel ; i < new_para ; i ++ ){
             pid = conn_sender_start(shortconn);
             if ( pid < 0 ) {
-                log_write(SYSLOG , LOGERR , "短链接通讯进程启动失败 , IP[%s] , PORT[%d]",shortconn->ip , shortconn->port);
+                log_write(SYSLOG , LOGERR , "connection process start OK , IP[%s] , PORT[%d]",shortconn->ip , shortconn->port);
             } else {
-                log_write(SYSLOG , LOGINF , "短链接通讯送进程启动成功 , IP[%s] , PORT[%d] , PID[%d]",shortconn->ip , shortconn->port , ret);
+                log_write(SYSLOG , LOGINF , "connection process start fail , IP[%s] , PORT[%d] , PID[%d]",shortconn->ip , shortconn->port , ret);
                 shortconn->para_pids[i] = pid;
             }
         }
-        offset = sprintf( ret+offset , "调整短链接通讯进程数为%d",new_para);
+        offset = sprintf( ret+offset , "alter parallel number to [%d] OK",new_para);
         shortconn->parallel = new_para;
     } else if ( new_para < shortconn->parallel ){
         for ( i = shortconn->parallel-1 ; i >= new_para ; i -- ){
             kill( shortconn->para_pids[i] , 9 );
         }
-        offset = sprintf( ret+offset , "调整短链接通讯进程数为%d",new_para);
+        offset = sprintf( ret+offset , "alter parallel number to [%d] OK",new_para);
         shortconn->parallel = new_para;
     } else if ( new_para <= 0 ){
-        offset = sprintf( ret+offset , "输入短链接并发数不合法");
+        offset = sprintf( ret+offset , "invalid parallel number");
     }
     return ret;
 }
@@ -1722,40 +1649,40 @@ int check_deamon()
 
 void deamon_exit()
 {
-    sleep(1);
-    /* 删除报文消息队列key */
+    log_write(SYSLOG , LOGINF ,"enter deamon_exit");
     if ( msgctl((key_t)QID_MSG , IPC_RMID , NULL) ){
-        log_write(SYSLOG , LOGERR ,"msgctl删除命令消息队列msgid=%d失败",QID_MSG);
+        log_write(SYSLOG , LOGERR ,"delete msgid=%d fail",QID_MSG);
     } else {
-        log_write(SYSLOG , LOGINF ,"msgctl删除命令消息队列msgid=%d成功",QID_MSG);
+        log_write(SYSLOG , LOGINF ,"delete msgid=%d OK",QID_MSG);
     }
-    /* 卸载、删除共享内存key */
+
     shmdt((void *)g_stat);
     if ( shmctl(g_shmid , IPC_RMID , 0) ){
-        log_write(SYSLOG , LOGERR ,"shmctl删除shmid=%d失败",g_shmid);
+        log_write(SYSLOG , LOGERR ,"delete shmid=%d fail",g_shmid);
     } else {
-        log_write(SYSLOG , LOGINF ,"shmctl删除shmid=%d成功",g_shmid);
+        log_write(SYSLOG , LOGINF ,"delete shmid=%d OK",g_shmid);
     }
+
     shmdt((void *)g_mon_stat);
     if ( shmctl(g_mon_shmid , IPC_RMID , 0) ){
-        log_write(SYSLOG , LOGERR ,"shmctl删除shmid=%d失败",g_mon_shmid);
+        log_write(SYSLOG , LOGERR ,"delete shmid=%d fail",g_mon_shmid);
     } else {
-        log_write(SYSLOG , LOGINF ,"shmctl删除shmid=%d成功",g_mon_shmid);
+        log_write(SYSLOG , LOGINF ,"delete shmid=%d OK",g_mon_shmid);
     }
-    /* 删除信号量key */
+
     union semun arg;
     arg.val = (short)0;
     if ( semctl(g_mon_semid,0,IPC_RMID,arg) ){
-        log_write(SYSLOG , LOGERR ,"semctl删除semid=%d失败",g_mon_semid);
+        log_write(SYSLOG , LOGERR ,"delete semid=%d fail",g_mon_semid);
     } else {
-        log_write(SYSLOG , LOGINF ,"semctl删除semid=%d成功",g_mon_semid);
+        log_write(SYSLOG , LOGINF ,"delete semid=%d OK",g_mon_semid);
     }
-    /* 释放日志句柄 */
+
     log_clear();
-    /* 释放全局结构体 */
+
     pack_config_free(p_pack_conf);
     conn_config_free(p_conn_conf);
-    /* 删除pidfile */
+
     remove(PIDFILE);
     exit(0);
 }
@@ -1767,20 +1694,19 @@ void deamon_signal_handler( int signo)
 void print_help()
 {
     printf("press [-p port] [-l loglevel] [-h]\n");
-    printf("       -p 指定监听端口(默认6043)\n");
-    printf("       -l 指定日志级别(默认4)\n");
+    printf("       -p specify listening port for command(default:6043)\n");
+    printf("       -l specify log level[1-7](default:4)\n");
     return ;
 }
 int main(int argc , char *argv[])
 {
-    /* 检查环境变量 */
     if ( getenv("PRESS_HOME") == NULL ){
-        printf("缺少环境变量${PRESS_HOME}\n");
+        printf("lacking environment parameter :${PRESS_HOME}\n");
         exit(1);
     }
     int op = 0;
-    PORT_CMD = 6043;        /* 默认监听端口 */
-    LOGLEVEL = 4;           /* 默认日志级别 */
+    PORT_CMD = 6043; 
+    LOGLEVEL = 4; 
     while ( ( op = getopt( argc , argv , "p:l:h") ) > 0 ) {
         switch(op){
             case 'h' :
@@ -1796,174 +1722,156 @@ int main(int argc , char *argv[])
     }
     sprintf(PIDFILE , "/tmp/press.%d" , PORT_CMD);
 
-    /* 检查是否已存在运行的实例 */
     if ( check_deamon() ){
-        printf("守护进程已经在运行,不可重复启动\n");
+        printf("deamon already started , do not rerun press\n");
         exit(1);
     }
 
-    /* 成为后台守护进程 */
     daemon_start();
 
-    /* 初始化日志模块 */
     log_init(SYSLOG , "system");
     log_init(PCKLOG , "packing");
     log_init(CONLOG , "connection");
 
-    /* 产生pidfile */
     FILE *fp = fopen( PIDFILE , "wb");
     if ( fp == NULL ){
-        log_write(SYSLOG , LOGERR , "无法打开pidfile %s , errno = %d" , PIDFILE , errno) ;
+        log_write(SYSLOG , LOGERR , "cannot open pidfile %s , errno = %d" , PIDFILE , errno) ;
     } else {
         fprintf(fp , "%d" , getpid());
         fclose(fp);
     }
-    log_write(SYSLOG , LOGINF , "守护进程启动成功");
-    log_write(SYSLOG , LOGINF , "环境变量${PRESS_HOME} [%s]" , getenv("PRESS_HOME"));
-    log_write(SYSLOG , LOGINF , "监听端口              [%d]" , PORT_CMD);
+    log_write(SYSLOG , LOGINF , "deamon start OK");
+    log_write(SYSLOG , LOGINF , "${PRESS_HOME}    [%s]" , getenv("PRESS_HOME"));
+    log_write(SYSLOG , LOGINF , "listenning port  [%d]" , PORT_CMD);
 
-    /* 信号处理 */
     signal(SIGCHLD , SIG_IGN);
     signal(SIGKILL , deamon_signal_handler);
     signal(SIGTERM , deamon_signal_handler);
 
     char *retmsg = NULL;
-    /* 初始化信号量 */
     g_mon_semid = sem_init();
     if ( g_mon_semid < 0 ){
-        log_write(SYSLOG , LOGERR , "初始化信号量失败");
+        log_write(SYSLOG , LOGERR , "init semophore fail");
         deamon_exit();
     }
-    log_write(SYSLOG , LOGINF , "初始化监控区信号量成功,g_mon_semid=%d",g_mon_semid);
+    log_write(SYSLOG , LOGINF , "init semophore OK , g_mon_semid=%d",g_mon_semid);
 
-    /* 初始化报文消息队列 */
     if ( (QID_MSG = msgget(IPC_PRIVATE , IPC_CREAT|0660)) < 0){
-        log_write(SYSLOG , LOGERR , "配置错误:无法从press.cfg中读取配置项[MSGKEY_MSG]");
+        log_write(SYSLOG , LOGERR , "init message queue fail");
         deamon_exit();
     }
-    log_write(SYSLOG , LOGINF , "初始化报文消息队列成功,QID_MSG=%d" , QID_MSG);
+    log_write(SYSLOG , LOGINF , "init message queue OK , QID_MSG=%d" , QID_MSG);
 
-    /* 初始化全局结构体 */
     p_conn_conf = (conn_config_st *)malloc(sizeof(conn_config_st));
     if ( p_conn_conf == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:malloc conn_config_st失败");
+        log_write(SYSLOG , LOGERR , "malloc for conn_config_st fail");
         deamon_exit();
     }
     p_conn_conf->status = NOTLOADED;
 
     p_pack_conf = (pack_config_st *)malloc(sizeof(pack_config_st));
     if ( p_pack_conf == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用malloc pack_config_st失败");
+        log_write(SYSLOG , LOGERR , "malloc for pack_config_st fail");
         deamon_exit();
     }
     p_pack_conf->status = NOTLOADED;
 
-    /* 初始化共享内存 */
     g_shmid = shmget( IPC_PRIVATE , MAX_PROC_NUM*sizeof(stat_st) , IPC_CREAT|0660);
     if ( g_shmid < 0 ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
+        log_write(SYSLOG , LOGERR , "shmat for stat_st fail");
         deamon_exit();
     }
     g_stat = (stat_st *)shmat(g_shmid , NULL,  0);
     if ( g_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_shmid);
+        log_write(SYSLOG , LOGERR , "shmat for stat_st fail , shmid = %d",g_shmid);
         deamon_exit();
     }
-    log_write(SYSLOG , LOGINF , "初始化全局状态内存区成功,g_shmid = %d" , g_shmid );
+    log_write(SYSLOG , LOGINF , "shmat for stat_st OK , g_shmid = %d" , g_shmid );
 
     g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
     if ( g_mon_shmid < 0 ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmget失败");
+        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail");
         deamon_exit();
     }
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
     if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "内部错误:调用shmat失败,shmid = %d",g_mon_shmid);
+        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail , shmid = %d",g_mon_shmid);
         deamon_exit();
     }
-    log_write(SYSLOG , LOGINF , "初始化监控状态内存区成功,g_mon_shmid = %d" , g_mon_shmid);
+    log_write(SYSLOG , LOGINF , "shmat for mon_stat_st OK , g_mon_shmid = %d" , g_mon_shmid);
 
-    /* 加载监听端口配置 */
     char buffer_cmd[MAX_CMD_LEN];
-    /* 创建监听socket */
+
     int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
     int sock_recv = 0;
     struct sockaddr_in server_sockaddr;
     struct sockaddr_in client_addr;
     socklen_t socket_len = sizeof(client_addr);
-    /* bind 端口*/
+
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_port = htons(PORT_CMD);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
-        log_write(SYSLOG , LOGERR , "命令监听端口[%d]bind 失败" , PORT_CMD);
+        log_write(SYSLOG , LOGERR , "bind port[%d] fail" , PORT_CMD);
         deamon_exit();
     }
-    log_write(SYSLOG , LOGDBG , "命令监听端口[%d]bind 成功" , PORT_CMD);
-    /* 启动监听 */
+    log_write(SYSLOG , LOGINF , "bind port[%d] OK" , PORT_CMD);
+
     if(listen(server_sockfd , 1) == -1){
-        log_write(SYSLOG , LOGERR , "命令监听端口[%d]监听失败" , PORT_CMD);
+        log_write(SYSLOG , LOGERR , "listen on port[%d] fail" , PORT_CMD);
         deamon_exit();
     }
-    log_write(SYSLOG , LOGDBG , "命令监听端口[%d]监听成功" , PORT_CMD);
+    log_write(SYSLOG , LOGDBG , "listen on port[%d] OK" , PORT_CMD);
 
-    /* 循环处理命令 */
     while (1){
-        log_write(SYSLOG , LOGINF , "守护进程等待命令输入...");
 
-        /* 接受远端连接 */
         sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
         if (sock_recv < 0){
-            log_write(SYSLOG , LOGERR , "命令监听端口[%d]accept 失败" , PORT_CMD);
+            log_write(SYSLOG , LOGERR , "accept on port[%d] fail , errno[%d]" , PORT_CMD , errno);
             deamon_exit();
         }
-        log_write(SYSLOG , LOGDBG , "命令监听端口[%d]accept 成功" , PORT_CMD);
+        log_write(SYSLOG , LOGDBG , "accept on port[%d] OK" , PORT_CMD);
         memset( buffer_cmd , 0x00 , sizeof(buffer_cmd));
-        /* 读取命令内容 */
+
         if ( recv(sock_recv , buffer_cmd , MAX_CMD_LEN , 0) < 0 ){
-            log_write(SYSLOG , LOGERR , "监听命令端口[%d]recv 失败" , PORT_CMD);
+            log_write(SYSLOG , LOGERR , "recv on port[%d] fail , errno[%d]" , PORT_CMD , errno);
             deamon_exit();
         }
-        log_write(SYSLOG , LOGDBG , "收到命令[%s]\n" , buffer_cmd);
+        log_write(SYSLOG , LOGDBG , "recv command[%s]\n" , buffer_cmd);
 
         if ( strncmp(buffer_cmd , "init" , 4) == 0 ){
             if (p_conn_conf->status == RUNNING){
-                log_write(SYSLOG , LOGINF ,"[init]执行失败,通讯模块不可重复启动");
-                send( sock_recv , "[init]执行失败,通讯模块不可重复启动" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [init] fail , connection module already started" , MAX_CMD_LEN , 0);
             } else {
                 conn_start(p_conn_conf);
-                send( sock_recv , "[init]执行成功,输入[stat]查看状态" , MAX_CMD_LEN , 0 );
+                send( sock_recv , "exec [init] OK , enter [stat] to check out" , MAX_CMD_LEN , 0 );
             }
         } else if ( strncmp(buffer_cmd , "stop" , 4) == 0 ){
             if (p_conn_conf->status != RUNNING){
-                log_write(SYSLOG , LOGINF ,"[stop]执行失败,通讯模块未启动");
-                send( sock_recv , "[stop]执行失败,输入[init]启动通讯模块" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [stop] fail , connection module not started" , MAX_CMD_LEN , 0);
             } else {
                 conn_stop(p_conn_conf);
-                send( sock_recv , "[stop]执行成功,通讯进程已停止" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [stop] OK , connection module is stopped" , MAX_CMD_LEN , 0);
             }
         } else if ( strncmp(buffer_cmd , "send" , 4) == 0 ) {
             if ( p_pack_conf->status != LOADED ){
-                log_write(SYSLOG , LOGINF ,"[send]执行失败,组包进程配置未加载");
-                send( sock_recv , "[send]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [send] fail , enter [load] to load packing config first" , MAX_CMD_LEN , 0);
             } else {
                 pack_send(p_pack_conf);
-                log_write(SYSLOG , LOGINF ,"[send]执行成功");
-                send( sock_recv , "[send]执行成功,输入[stat]或[moni]查看发送情况" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [send] OK , enter [stat/moni] to check out" , MAX_CMD_LEN , 0);
             }
         } else if ( strncmp(buffer_cmd , "shut" , 4) == 0){
             pack_shut(p_pack_conf);
-            log_write(SYSLOG , LOGINF ,"[shut]执行成功");
-            send( sock_recv , "[shut]执行成功,组包进程已停止" , MAX_CMD_LEN , 0);
+            send( sock_recv , "exec [shut] OK , packing module is stopped" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "kill" , 4) == 0 ){
             if (pack_shut(p_pack_conf) ) {
-                log_write(SYSLOG , LOGERR ,"组包进程停止失败");
+                log_write(SYSLOG , LOGERR ,"packing module stop fail");
             }
             if ( conn_stop(p_conn_conf) ){
-                log_write(SYSLOG , LOGERR ,"通讯进程停止失败");
+                log_write(SYSLOG , LOGERR ,"connection module stop fail");
             }
-            send( sock_recv , "[kill]执行成功,守护进程正在退出" , MAX_CMD_LEN , 0);
+            send( sock_recv , "exec [kill] OK , deamon process quitting" , MAX_CMD_LEN , 0);
             close(sock_recv);
             deamon_exit();
         } else if ( strncmp(buffer_cmd , "stat" , 4) == 0){
@@ -1976,16 +1884,13 @@ int main(int argc , char *argv[])
             free(retmsg);
         } else if ( strncmp(buffer_cmd , "load" , 4) == 0){
             if ( pack_load(buffer_cmd , p_pack_conf) ){
-                log_write(SYSLOG , LOGERR ,"[load]执行失败");
-                send( sock_recv , "[load]执行失败" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [load] fail" , MAX_CMD_LEN , 0);
             } else {
-                log_write(SYSLOG , LOGINF ,"[load]执行成功");
-                send( sock_recv , "[load]执行成功" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [load] OK , enter [stat] to check out" , MAX_CMD_LEN , 0);
             }
         } else if ( strncmp( buffer_cmd , "tps" , 3) == 0){
             if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
-                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
-                send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [tps] fail , enter [load] to load packing configs first" , MAX_CMD_LEN , 0);
             } else {
                 retmsg = adjust_status( 1 , buffer_cmd , p_pack_conf);
                 send( sock_recv , retmsg , MAX_CMD_LEN , 0);
@@ -1993,8 +1898,7 @@ int main(int argc , char *argv[])
             }
         } else if ( strncmp( buffer_cmd , "time" , 4) == 0 ){
             if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
-                log_write(SYSLOG , LOGINF ,"[tps]执行失败,组包进程配置未加载");
-                send( sock_recv , "[tps]执行失败,输入[load]加载组包进程配置" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [tps] fail , enter [load] to load packing configs first" , MAX_CMD_LEN , 0);
             } else {
                 retmsg = adjust_status( 2 , buffer_cmd , p_pack_conf);
                 send( sock_recv , retmsg , MAX_CMD_LEN , 0);
@@ -2002,8 +1906,7 @@ int main(int argc , char *argv[])
             }
         } else if ( strncmp( buffer_cmd , "para" , 4) == 0 ){
             if ( p_conn_conf->status != RUNNING ){
-                log_write(SYSLOG , LOGINF ,"[para]执行失败,组包进程未启动");
-                send( sock_recv , "[para]执行失败,组包进程未启动" , MAX_CMD_LEN , 0);
+                send( sock_recv , "exec [para] fail , enter [init] to start connection module first" , MAX_CMD_LEN , 0);
             }
             retmsg = adjust_para( buffer_cmd , p_conn_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
@@ -2013,6 +1916,5 @@ int main(int argc , char *argv[])
         }
         close(sock_recv);
     }
-    /* 退出清理 */
     deamon_exit();
 }

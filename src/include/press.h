@@ -35,8 +35,8 @@ typedef struct comm_proc{
 	char 	ip[20];					/*ip address*/
 	int 	port;					/*port number*/
     int     persist;                /*wheathe writes to file*/
-    int     parallel;               /*短链接并发数*/
-    pid_t   para_pids[MAX_PARA_NUM];/*短链接并发进程*/
+    int     parallel;               /*parallel number*/
+    pid_t   para_pids[MAX_PARA_NUM];/*pids*/
 	struct 	comm_proc *next;		/*next process*/
 }comm_proc_st;
 
@@ -74,7 +74,7 @@ typedef struct TEMPLATE{
 }tpl_st;
 
 typedef struct RULE{
-    int     type;           /* 替换类型 */
+    int     type;           /* type */
 	int 	start;          /* start postion */
 	int 	length;         /* substitution length */
 	rep_st	*rep_head;      /* link list for replacements */
