@@ -440,6 +440,7 @@ int conn_sender_start(comm_proc_st *p_sender)
                 exit(1);
             } else if ( strncmp(buffer , "0000" , 4) == 0){
                 log_write(CONLOG , LOGDBG , "recv get 0000");
+                close( sock_send );
                 continue;
             } else {
                 textlen = atoi(buffer);
@@ -1283,7 +1284,7 @@ void cleanRule(rule_st *ruleHead)
 {
     rule_st *cur = ruleHead;
     rule_st *nex = ruleHead;
-    rep_st    *rep_cur = NULL;
+    rep_st  *rep_cur = NULL;
 
     while ( cur != NULL ){
         while( cur->rep_head != NULL){
