@@ -432,12 +432,19 @@ int conn_sender_start(comm_proc_st *p_sender)
         if ( p_sender->type == 'X' ){
             log_write(CONLOG , LOGDBG , "start to recv" ,p_sender->type ,  p_sender->ip , p_sender->port);
             memset( buffer , 0x00 , sizeof(buffer) );
+
+            signal( SIGALRM , conn_sender_signal_handler);
+            alarm(10);
             recvlen = recv(sock_send , buffer , 4 , 0);
             if (recvlen <= 0){
-                log_write(CONLOG , LOGERR , "recv returns[%d] , process exit" ,\
-                        p_sender->type ,  p_sender->ip , p_sender->port , recvlen);
                 close(sock_send);
-                exit(1);
+                if ( errno == EINTR ){
+                    log_write(CONLOG , LOGERR , "recv wait time out 10s , try to reconnect" );
+                    alarm(0);
+                } else {
+                    log_write(CONLOG , LOGERR , "recv returns[%d] , try to reconnect" , recvlen);
+                }
+                continue;
             } else if ( strncmp(buffer , "0000" , 4) == 0){
                 log_write(CONLOG , LOGDBG , "recv get 0000");
                 close( sock_send );
@@ -481,8 +488,13 @@ int conn_sender_start(comm_proc_st *p_sender)
 }
 void conn_sender_signal_handler(int no)
 {
-    close(sock_send);
-    exit(0);
+    switch(no){
+        case SIGTERM :
+            close(sock_send);
+            exit(0);
+        case SIGALRM :
+            return;
+    }
 }
 int conn_jips_start(comm_proc_st *p_jips)
 {
@@ -1362,12 +1374,18 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
     }
     if ( (flag & STAT_PACK) ){
         if ( p_pack_conf->status == LOADED || p_pack_conf->status == RUNNING ) {
+            struct msqid_ds buf;
+            if(msgctl(QID_MSG , IPC_STAT, &buf) == -1){
+                log_write(SYSLOG , LOGERR , "msgctl get stat fail");
+                buf.msg_qnum = 0;
+            }
+
             offset += sprintf(ret+offset , \
                     "PACKING PROCESS STATUS\n");
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "===========================================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[INDEX][TPLFILE    ][STATUS     ][TPS     ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
+                    "[INDEX][TPLFILE    ][STATUS     ][TPS     ][PACKAGE SENT][SENTTIME/TOTALTIME][QUEUE REMAIN]\n");
             while ( p_pack != NULL ) {
                 l_stat = g_stat + p_pack->index;
                 memset( status , 0x00 , sizeof(status));
@@ -1380,19 +1398,20 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                         strcpy(status , "ALL SENT   ");
                     }
                     offset += sprintf(ret+offset , \
-                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d]\n" , \
+                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d][%-12lu]\n" , \
                                     p_pack->index,\
                                     p_pack->tplFileName,\
                                     status,\
                                     l_stat->tps,\
                                     l_stat->send_num,\
                                     l_stat->timelast,\
-                                    l_stat->timetotal);
+                                    l_stat->timetotal,\
+                                    buf.msg_qnum);
                 }
                 p_pack = p_pack->next;
             }
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "===========================================================================================\n");
         } else {
             offset += sprintf(ret+offset , "NO PACKING PROCESS, ENTER load TO LOAD CONFIGS\n");
         }
