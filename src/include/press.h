@@ -19,6 +19,7 @@
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2
 #define REPTYPE_F7      3
+#define REPTYPE_PIN     4
 
 #define STAT_CONN       0x1
 #define STAT_PACK       0x10
@@ -116,6 +117,7 @@ int     pack_send(pack_config_st *p_pack_conf);
 int     pack_shut(pack_config_st *p_pack_conf);
 void    pack_pit_load(stat_st *l_stat , pit_proc_st *p_pitcher);
 int     pack_pit_start(pit_proc_st *p_pitcher);
+void    pack_pit_signal_handler(int signo);
 void    cal_time_ns(int tps , struct timespec *ts);
 int     persist(char *text , int len , char type , struct timeval ts);
 int     sem_init();

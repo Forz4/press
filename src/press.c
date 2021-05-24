@@ -21,6 +21,8 @@ pack_config_st *p_pack_conf = NULL;     /* packing configs pointer              
 int         lastTimeSendNum;            /* sent number at last checkpoint            */
 int         lastTimeRecvNum;            /* received number at last checkpoint        */
 struct timeval lastTimeStamp;           /* timestamp of last checkpoint              */
+int         server_sockfd;		        /* command listening socket                  */
+int         pack_pit_quit;
 
 int conn_config_load(conn_config_st *p_conn_conf)
 {
@@ -385,7 +387,7 @@ int conn_sender_start(comm_proc_st *p_sender)
                         0, \
                         0 );
         if ( ret < 0 ){
-            log_write(CONLOG , LOGERR , "msgrcv fail ,ret[%d],msgid[%d]",ret,QID_MSG);
+            log_write(CONLOG , LOGERR , "msgrcv fail ,ret[%d],msgid[%d],errno[%d]",ret,QID_MSG , errno);
             close(sock_send);
             exit(1);
         }
@@ -946,7 +948,6 @@ void pack_pit_load(stat_st *l_stat , pit_proc_st *p_pitcher)
     return; 
 }
 
-
 int pack_pit_start(pit_proc_st *p_pitcher)
 {
     int pid;
@@ -956,6 +957,9 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     } else if ( pid > 0 ){
         return pid;
     }
+
+    pack_pit_quit = 0;
+    signal( SIGTERM , pack_pit_signal_handler);
 
     log_write(PCKLOG , LOGINF , "packing process start[%s]" , p_pitcher->tplFileName);
     /* relocate share memory */
@@ -1006,7 +1010,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
     msgs.type = 1;
     msgs.length = mytpl.len + 4;
     gettimeofday(&tv_begin,NULL);
-    while( l_stat->left_num > 0 ){
+    while( l_stat->left_num > 0 && pack_pit_quit == 0 ){
         log_write(PCKLOG , LOGDBG , "start to pack");
         gettimeofday(&tv_start,NULL);
         memset(msgs.text , 0x00 , sizeof(msgs.text));
@@ -1018,15 +1022,31 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             if ( currule->type == REPTYPE_RANDOM ){
                 random = rand()%((int)_pow(10,currule->length));
                 sprintf( temp , "%0*d" , currule->length , random);
+                memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
+                log_write(PCKLOG , LOGDBG , "RANDOM[%s]" , temp);
             } else if ( currule->type == REPTYPE_FILE ){
                 strcpy(temp , currule->rep_head->text);
                 currule->rep_head = currule->rep_head->next;
+                log_write(PCKLOG , LOGDBG , "FILE[%s]" , temp);
+                memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
             } else if ( currule->type == REPTYPE_F7 ){
                 time(&t);
                 lt = localtime(&t);
                 sprintf(temp,"%02d%02d%02d%02d%02d",lt->tm_mon+1,lt->tm_mday,lt->tm_hour,lt->tm_min,lt->tm_sec);
+                log_write(PCKLOG , LOGDBG , "F7[%s]" , temp);
+                memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
+            } else if ( currule->type == REPTYPE_PIN ) {
+                unsigned int c = 0;
+                int i = 0;
+                log_write(PCKLOG , LOGDBG , "read pinblock[%s]" , currule->rep_head->text);
+                for ( i = 0 ; i <  currule->length / 2 ; i ++ ){
+                    sscanf( currule->rep_head->text + 2*i  , "%02x" , &c );
+                    sprintf( temp+i , "%c" , (unsigned char)c );
+                    log_write(PCKLOG , LOGDBG , "pinblock after convert[%d][%02x]" , i , (unsigned char )c);
+                }
+                memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length / 2 );
+                currule->rep_head = currule->rep_head->next;
             }
-            memcpy(msgs.text + currule->start - 1 + 4 , temp , currule->length);
             currule = currule->next;
         }
         log_write(PCKLOG , LOGDBG , "pack OK , prepare to send to queue");
@@ -1052,10 +1072,15 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             usleep( timeIntervalUs - tv_interval.tv_usec );
     }
     l_stat->tag = FINISHED;
-    cleanRule(ruleHead);
+    //cleanRule(ruleHead);
     exit(0);
 }
 
+void pack_pit_signal_handler(int signo)
+{
+    pack_pit_quit = 1;
+    return ;
+}
 int persist(char *text , int len , char type , struct timeval ts)
 {
     FILE *fp = NULL;
@@ -1082,9 +1107,9 @@ int persist(char *text , int len , char type , struct timeval ts)
         fprintf( fp , "HEX PRINT START\n");
         int i = 0;
         int j = 0;
-        char ch = ' ';
+        unsigned char ch = ' ';
         for ( i = 0 ; i <= len/16 ; i ++){
-            fprintf( fp , "%06d " , i);
+            fprintf( fp , "%06X " , i*16 );
             for ( j = 0 ; j+i*16 < len && j < 16 ;j ++){
                 ch = (unsigned char)text[j+i*16];
                 fprintf( fp , "%02X " , ch);
@@ -1219,10 +1244,17 @@ rule_st *get_rule(FILE *fp)
         }
         if ( strncmp( buf , "RAND" , 4 ) == 0  ){
             cur->type = REPTYPE_RANDOM;
-        } else if ( strncmp( buf , "FILE:" , 5) == 0 ){
-            cur->type = REPTYPE_FILE;
-            memset(pathname , 0x00 , sizeof(pathname));
-            sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+5);
+        } else if ( strncmp( buf , "FILE:" , 5) == 0 || strncmp( buf, "PIN:" , 4) == 0 ){
+            if ( strncmp( buf , "FILE:" , 5) == 0 ){
+                cur->type = REPTYPE_FILE;
+                memset(pathname , 0x00 , sizeof(pathname));
+                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+5);
+            }
+            else{
+                cur->type = REPTYPE_PIN;
+                memset(pathname , 0x00 , sizeof(pathname));
+                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+4);
+            }
             rep_fp = fopen(pathname , "r");
             if (rep_fp == NULL){
                 log_write(SYSLOG , LOGERR , "rep_file[%s] not found",pathname);
@@ -1383,9 +1415,9 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
             offset += sprintf(ret+offset , \
                     "PACKING PROCESS STATUS\n");
             offset += sprintf(ret+offset , \
-                    "===========================================================================================\n");
+                    "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[INDEX][TPLFILE    ][STATUS     ][TPS     ][PACKAGE SENT][SENTTIME/TOTALTIME][QUEUE REMAIN]\n");
+                    "[INDEX][TPLFILE    ][STATUS     ][TPS     ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
             while ( p_pack != NULL ) {
                 l_stat = g_stat + p_pack->index;
                 memset( status , 0x00 , sizeof(status));
@@ -1398,20 +1430,24 @@ char *get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_c
                         strcpy(status , "ALL SENT   ");
                     }
                     offset += sprintf(ret+offset , \
-                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d][%-12lu]\n" , \
+                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d]\n" , \
                                     p_pack->index,\
                                     p_pack->tplFileName,\
                                     status,\
                                     l_stat->tps,\
                                     l_stat->send_num,\
                                     l_stat->timelast,\
-                                    l_stat->timetotal,\
-                                    buf.msg_qnum);
+                                    l_stat->timetotal);
                 }
                 p_pack = p_pack->next;
             }
             offset += sprintf(ret+offset , \
-                    "===========================================================================================\n");
+                    "===========================================================================\n");
+            offset += sprintf(ret+offset , \
+                    "QUEUE REMAIN NUMBER :%lu\n" , buf.msg_qnum);
+            offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
+
         } else {
             offset += sprintf(ret+offset , "NO PACKING PROCESS, ENTER load TO LOAD CONFIGS\n");
         }
@@ -1670,6 +1706,7 @@ int check_deamon()
 void deamon_exit()
 {
     log_write(SYSLOG , LOGINF ,"enter deamon_exit");
+    close(server_sockfd);
     if ( msgctl((key_t)QID_MSG , IPC_RMID , NULL) ){
         log_write(SYSLOG , LOGERR ,"delete msgid=%d fail",QID_MSG);
     } else {
@@ -1698,7 +1735,7 @@ void deamon_exit()
         log_write(SYSLOG , LOGINF ,"delete semid=%d OK",g_mon_semid);
     }
 
-    log_clear();
+    //log_clear();
 
     pack_config_free(p_pack_conf);
     conn_config_free(p_conn_conf);
@@ -1822,7 +1859,7 @@ int main(int argc , char *argv[])
 
     char buffer_cmd[MAX_CMD_LEN];
 
-    int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
+    server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
     int sock_recv = 0;
     struct sockaddr_in server_sockaddr;
     struct sockaddr_in client_addr;
