@@ -27,14 +27,12 @@ typedef struct message_struct{
 	struct timeval ts;
 }msg_st;
 
-#if 0
-union semun {
+union semun1 {
    	int              val;    /* Value for SETVAL */
    	struct semid_ds *buf;    /* Buffer for IPC_STAT, IPC_SET */
    	unsigned short  *array;  /* Array for GETALL, SETALL */
    	struct seminfo  *__buf;  /* Buffer for IPC_INFO*/
 };
-#endif
 
 extern int get_bracket(const char *line , int no , char *value , int val_size);
 extern int get_length(const char *);

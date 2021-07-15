@@ -1144,7 +1144,7 @@ int sem_init()
 {
     int semid = 0;
     int ret = 0;
-    union semun arg;
+    union semun1 arg;
 
     semid = semget(IPC_PRIVATE , 1 , IPC_CREAT|0660);
     if ( semid < 0 ){
@@ -1727,7 +1727,7 @@ void deamon_exit()
         log_write(SYSLOG , LOGINF ,"delete shmid=%d OK",g_mon_shmid);
     }
 
-    union semun arg;
+    union semun1 arg;
     arg.val = (short)0;
     if ( semctl(g_mon_semid,0,IPC_RMID,arg) ){
         log_write(SYSLOG , LOGERR ,"delete semid=%d fail",g_mon_semid);
