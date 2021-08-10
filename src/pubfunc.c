@@ -1,4 +1,5 @@
 #include "include/pubfunc.h"
+
 extern int errno;
 
 extern int get_bracket(const char *line , int no , char *value , int val_size)
@@ -143,25 +144,6 @@ extern int loadConfig(char *key , char *value , int val_len)
 	return 1;
 }
 
-void daemon_start()
-{
-	pid_t pid = 0;
-	pid = fork();
-	if ( pid < 0 ){
-		printf("fork fail\n");
-		exit(-1);
-	} else if ( pid > 0 ){
-		exit(0);
-	} else {
-	    if(setsid() == -1)
-		{
-			printf("setsid fail , errno[%d]\n",errno);
-			exit(1);
-		}
-		umask(0);
-		return; 
-	}
-}
 extern int _pow(int base , int m)
 {
     int ret = 1;

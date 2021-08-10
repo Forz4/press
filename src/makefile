@@ -1,31 +1,27 @@
-CCFLAG=-Wall -std=gnu99
-CC=gcc
-
-#CCFLAG=-g
-#CC=cc
+INCPATH = ../include
+LIBPATH = ../lib
+BINPATH = ../bin
+LIBS = -lhiredis
+CFLAGS = -Wall -std=gnu99 -fPIC -g
+CC = @gcc
+MV = @mv
+AR = @ar -ruc
+RM = @-rm -f
+ECHO = @echo
 
 all: press presscmd
 
-presscmd: presscmd.o log.o pubfunc.o
-	@$(CC) -o presscmd presscmd.o log.o pubfunc.o
-	@mv presscmd ../bin/
+.c.o:
+	$(CC) -c $< -I$(INCPATH) $(CFLAGS)
 
-press: press.o log.o pubfunc.o
-	@$(CC) -o press press.o log.o pubfunc.o
-	@mv press ../bin/
+presscmd: presscmd.o log.o pubfunc.o 8583.o
+	$(CC) -o $@ $^ $(LIBS) -L$(LIBPATH)
+	$(MV) $@ $(BINPATH)
 
-log.o: log.c include/log.h
-	@$(CC) -c log.c $(CCFLAG)
-
-pubfunc.o: pubfunc.c include/pubfunc.h
-	@$(CC) -c pubfunc.c $(CCFLAG)
-
-press.o: press.c include/press.h
-	@$(CC) -c press.c $(CCFLAG)
-
-presscmd.o: presscmd.c include/presscmd.h
-	@$(CC) -c presscmd.c $(CCFLAG)
+press: press.o log.o pubfunc.o 8583.o
+	$(CC) -o $@ $^ $(LIBS) -L$(LIBPATH)
+	$(MV) $@ $(BINPATH)
 
 clean:
-	@-rm -f *.o
-
+	$(RM) *.o
+	$(RM) $(BINPATH)/press $(BINPATH)/presscmd 

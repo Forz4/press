@@ -22,6 +22,7 @@
 #include <sys/shm.h>
 #include <math.h>
 #include <stdarg.h>
+#include <hiredis/hiredis.h>
 
 #define MAX_PATHNAME_LEN 200
 #define MAX_FILENAME_LEN 20

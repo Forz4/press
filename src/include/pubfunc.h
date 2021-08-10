@@ -22,8 +22,6 @@ typedef struct message_struct{
 	long type;
     int  length;
 	char text[MAX_MSG_LEN];
-    char flag;  /* to tell a sender or receiver*/
-    int  pid;   /* to indicate to pid of sender */
 	struct timeval ts;
 }msg_st;
 
@@ -34,13 +32,12 @@ union semun1 {
    	struct seminfo  *__buf;  /* Buffer for IPC_INFO*/
 };
 
-extern int get_bracket(const char *line , int no , char *value , int val_size);
-extern int get_length(const char *);
-extern int padding(char *s , char dir , char sub , char *d , int d_len);
-extern void rTrim(char *str);
-extern void lTrim(char *str);
-extern int loadConfig(char *key , char *value  ,int val_len);
-void daemon_start();
-extern int _pow(int , int);
+int         get_bracket(const char *line , int no , char *value , int val_size);
+int         get_length(const char *);
+int         padding(char *s , char dir , char sub , char *d , int d_len);
+void        rTrim(char *str);
+void        lTrim(char *str);
+int         loadConfig(char *key , char *value  ,int val_len);
+int         _pow(int , int);
 
 #endif
