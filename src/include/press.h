@@ -17,10 +17,8 @@
 #define MAX_PARA_NUM    500
 
 #define CONN_BINDFAIL      -1
-#define CONN_NOTKNOWN       0
+#define CONN_NOTREADY       0
 #define CONN_ESTABLISHED	1
-#define CONN_CONNECTING 	2
-#define CONN_BINDOK         3
 
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2

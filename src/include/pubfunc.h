@@ -3,10 +3,11 @@
 
 #include "common.h"
 
-#define MAX_CFG_KEY_LEN 30
-#define MAX_CFG_VAL_LEN 50
-#define MAX_CFG_LINE_LEN 100
-#define MAX_MSG_LEN 2000
+#define MAX_CFG_KEY_LEN    30
+#define MAX_CFG_VAL_LEN    50
+#define MAX_CFG_LINE_LEN   100
+#define MAX_MSG_LEN        2000
+#define MAX_REPLY_LEN      4096
 
 #define	timersub(tvp, uvp, vvp)						        \
 	do {								                    \

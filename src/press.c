@@ -385,14 +385,15 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     if (bind(server_sockfd , (struct sockaddr *)&server_sockaddr , sizeof(server_sockaddr)) == -1)
     {
         log_write(CONLOG , LOGERR , "bind port[%d] fail" , p_receiver->port);
-        //conn_report_status( CONN_BINDFAIL );
+        close(server_sockfd);
+        conn_report_status( CONN_BINDFAIL );
         exit(1);
     }
-    //conn_report_status( CONN_BINDOK );
     log_write(CONLOG , LOGINF , "bind port[%d] OK" , p_receiver->port);
 
     if(listen(server_sockfd , 1) == -1){
         log_write(CONLOG , LOGERR , "listen port[%d] fail" , p_receiver->port);
+        close(server_sockfd);
         exit(1);
     }
     log_write(CONLOG , LOGINF , "listen port[%d] OK" , p_receiver->port);
@@ -400,9 +401,10 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
         log_write(CONLOG , LOGERR , "accept on port[%d] fail" , p_receiver->port);
+        close(server_sockfd);
         exit(1);
     }
-    //conn_report_status( CONN_ESTABLISHED );
+    conn_report_status( CONN_ESTABLISHED );
     log_write(CONLOG , LOGINF , "accept on port[%d] OK" , p_receiver->port);
 
     g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
@@ -561,7 +563,6 @@ int conn_sender_start(comm_proc_st *p_sender)
         log_write(SYSLOG, LOGERR, "connection error:%s\n", c->errstr);
 
     int connected = 0;
-    //conn_report_status( CONN_CONNECTING );
     while(1){
         if ( connected == 0 || p_sender->type == 'X' ){
             connected = 1;
@@ -580,7 +581,7 @@ int conn_sender_start(comm_proc_st *p_sender)
                 break;
             }
         }
-        //conn_report_status( CONN_ESTABLISHED );
+        conn_report_status( CONN_ESTABLISHED );
         log_write(CONLOG , LOGDBG , "connect OK");
 
         if (HEART_INTERVAL > 0){
@@ -967,7 +968,7 @@ void conn_report_status( int status )
         sock = socket(AF_INET , SOCK_STREAM , 0);
         if (connect(sock , (struct sockaddr*)&servaddr , sizeof(servaddr)) < 0){
             close(sock);
-            usleep(50000);
+            usleep(5000);
         } else {
             break;
         }
@@ -1515,13 +1516,13 @@ void deamon_clean_rule(rule_st *ruleHead)
 
 char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
 {
-    char *ret = (char *)malloc(MAX_MSG_LEN);
+    char *ret = (char *)malloc(MAX_REPLY_LEN);
     int offset = 0;
     char status[20];
     char type[20];
     struct  timeval nowTimeStamp;
-    struct  timeval timeInterval;
-    memset(ret , 0x00 , MAX_MSG_LEN);
+    /*struct  timeval timeInterval;*/
+    memset(ret , 0x00 , MAX_REPLY_LEN);
     comm_proc_st *p_comm = p_conn_conf->process_head;
     pit_proc_st  *p_pack = p_pack_conf->pit_head;
     stat_st *l_stat;
@@ -1550,17 +1551,11 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
                         case CONN_ESTABLISHED:
                             strcpy( status , "ESTABLISHED");
                             break;
-                        case CONN_BINDOK:
-                            strcpy( status , "BIND OK");
-                            break;
                         case CONN_BINDFAIL:
                             strcpy( status , "BIND FAIL");
                             break;
-                        case CONN_CONNECTING:
-                            strcpy( status , "CONNECTING");
-                            break;
                         default:
-                            strcpy( status , "UNKNOWN");
+                            strcpy( status , "NOT READY");
                             break;
                     }
                 }
@@ -1632,13 +1627,35 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
     }
     if ( flag & STAT_MONI ){
         if ( p_pack_conf->status == RUNNING ) {
+            /* connect to redis*/
+            redisContext *c = redisConnect("127.0.0.1", 6379);
+            if(c->err)   
+                log_write(SYSLOG, LOGERR, "redis server not found : %s\n", c->errstr);
+
             offset += sprintf(ret+offset , \
                     "REAL TIME MONITOR\n");
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[PACKAGE SENT][PACKAGE RECV][TPS SENT][TPS RECV]\n");
+                    "[TIME    ][TPS SENT][TPS RECV]\n");
             gettimeofday(&nowTimeStamp,NULL);
+            for( int i = 0 ; i < 10 ; i ++ ){
+                time_t t = nowTimeStamp.tv_sec - i;
+                struct tm *temp = localtime(&t);
+                int sendtps = 0;
+                int recvtps = 0;
+                redisReply *reply = NULL;
+                reply = redisCommand( c , "get sendtps|%d", nowTimeStamp.tv_sec-i);
+                if ( reply->type != REDIS_REPLY_NIL && reply->str )   sendtps = atoi(reply->str);
+                freeReplyObject(reply);
+                reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec-i);
+                if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
+                freeReplyObject(reply);
+                offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
+                    temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
+            }
+            redisFree(c);
+            /*
             timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
             memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
             if ( lastTimeSendNum > 0 ){
@@ -1658,6 +1675,7 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
 
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
+            */
 
         } else {
             offset += sprintf(ret+offset , "NO REAL TIME MONITOR");
@@ -1669,7 +1687,7 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
 
 char *deamon_adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
 {
-    char *ret = (char *)malloc(MAX_MSG_LEN);
+    char *ret = (char *)malloc(MAX_REPLY_LEN);
     int i = 0; 
     int offset = 0;
 
@@ -1769,7 +1787,7 @@ char *deamon_adjust_para( char *msg , conn_config_st *p_conn_config)
     comm_proc_st *shortconn = p_conn_config->process_head;
     int i = 0;
     int offset = 0;
-    char *ret = (char *)malloc(MAX_MSG_LEN);
+    char *ret = (char *)malloc(MAX_REPLY_LEN);
     int pid = 0;
 
     while ( msg[i] != ' ' ){
@@ -1956,6 +1974,7 @@ void deamon_udpate_conn_status( char *buffer_cmd , conn_config_st *p_conn_conf )
     int pid = 0;
     int status = 0;
     sscanf( buffer_cmd+7 , "%d %d" , &pid , &status);
+    log_write(SYSLOG, LOGINF, "update conn status [%d][%d]", pid , status);
     comm_proc_st *temp = p_conn_conf->process_head;
     while ( temp ){
         if ( temp->pid == pid ){

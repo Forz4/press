@@ -86,7 +86,7 @@ int main(int argc , char *argv[])
 {
 	/*variables*/
     char inputLine[200];
-    char buffer[2000];
+    char buffer[MAX_REPLY_LEN];
     //int  press_pid = 0;
     int  monitor_mode = 0;
 
