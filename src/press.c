@@ -2,7 +2,7 @@
 #include "include/log.h"
 #include "include/8583.h"
 
-/* constants */
+/* global variables */
 sigjmp_buf  jmpbuf;                     /* for long jump                             */
 char        PIDFILE[200];               /* PIDFILE name                              */
 int         PORT_CMD = 0;               /* listen port for command                   */
@@ -20,9 +20,14 @@ pack_config_st *p_pack_conf = NULL;     /* packing configs pointer              
 int         server_sockfd;		        /* command listening socket                  */
 int         pack_pit_quit;
 
-/* functions */
+/*
+    parse matchup key , trannum , retcode from message
+ */
 int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
 {
+    if ( message == NULL && key == NULL ){
+        return -1;
+    }
     int offset = 0;
     offset += sprintf( key+offset , "matchup|" );
 
@@ -72,6 +77,9 @@ int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
     }
     return 0;
 }
+/*
+    write text to file
+ */
 int persist(char *text , int len , char type , struct timeval ts)
 {
     FILE *fp = NULL;
@@ -130,7 +138,176 @@ int persist(char *text , int len , char type , struct timeval ts)
     log_write(CONLOG , LOGDBG , "persist OK");
     return 0;
 }
+rule_st *get_rule(FILE *fp)
+{
+    char      line[150];
+    char      buf[100];
+    char      pathname[MAX_PATHNAME_LEN];
 
+    char      temp[MAX_LINE_LEN];
+    char      replace[MAX_REP_LEN];
+    FILE      *rep_fp = NULL;
+    rep_st    *rep_head = NULL;
+    rep_st    *rep_tail = NULL;
+    rep_st    *rep_cur = NULL;
+
+    rule_st *cur = NULL;
+    rule_st *ret = NULL;
+
+    memset(line , 0x00 , sizeof(line));
+    memset(buf , 0x00 , sizeof(buf));
+
+    log_write(SYSLOG , LOGINF , "start to load rule file");
+
+    while( fgets(line , sizeof(line) , fp) != NULL ){
+
+        if ( line[0] == '\n' || line[0] == '#' )
+            continue;
+
+        cur = (rule_st *)malloc(sizeof(rule_st));
+        if ( cur == NULL ){
+            log_write(SYSLOG , LOGERR , "malloc for rule_st fail");
+            fclose(fp);
+            return NULL;
+        }
+
+        memset(cur , 0x00 , sizeof(rule_st));
+
+        if (get_bracket(line , 1 , buf , 100))
+        {
+            log_write(SYSLOG , LOGERR , "format error in field1[start position]");
+            return NULL;
+        }
+        cur->start = atoi(buf);
+        log_write(SYSLOG , LOGINF , "read start position[%d]" , cur->start);
+
+        if (get_bracket(line , 2 , buf , 100))
+        {
+            log_write(SYSLOG , LOGERR , "format error in field2[substution length]");
+            return NULL;
+        }
+        cur->length = atoi(buf);
+        log_write(SYSLOG , LOGINF , "read substution length[%d]" , cur->length);
+
+        if (get_bracket(line , 3 , buf , 100))
+        {
+            log_write(SYSLOG , LOGERR , "format error in field3[padding mode]");
+            return NULL;
+        }
+        cur->pad = atoi(buf);
+        log_write(SYSLOG , LOGINF , "read padding mode[%d]" , cur->pad);
+
+        if (get_bracket(line , 4 , buf , 100))
+        {
+            log_write(SYSLOG , LOGERR , "format error in field4[substution mode]");
+            return NULL;
+        }
+        if ( strncmp( buf , "RAND" , 4 ) == 0  ){
+            cur->type = REPTYPE_RANDOM;
+        } else if ( strncmp( buf , "FILE:" , 5) == 0 || strncmp( buf, "PIN:" , 4) == 0 ){
+            if ( strncmp( buf , "FILE:" , 5) == 0 ){
+                cur->type = REPTYPE_FILE;
+                memset(pathname , 0x00 , sizeof(pathname));
+                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+5);
+            }
+            else{
+                cur->type = REPTYPE_PIN;
+                memset(pathname , 0x00 , sizeof(pathname));
+                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+4);
+            }
+            rep_fp = fopen(pathname , "r");
+            if (rep_fp == NULL){
+                log_write(SYSLOG , LOGERR , "rep_file[%s] not found",pathname);
+                return NULL;
+            }
+
+            memset(temp , 0x00 , sizeof(temp));
+            rep_head = NULL;
+            rep_tail = NULL;
+            rep_cur = NULL;
+            while( fscanf( rep_fp , "%s" , temp) != EOF ){
+                rep_cur = (rep_st *)malloc(sizeof(rep_st));
+                if (rep_cur == NULL){
+                    log_write(SYSLOG , LOGERR , "loading replace file , malloc fail ");
+                    fclose(rep_fp);
+                    return NULL;
+                }
+
+                /* do paddings */
+                memset( replace , 0x00 , MAX_REP_LEN );
+                if (cur->pad == 1){
+                    padding(temp, 'l' , '0' , replace , cur->length);
+                } else if (cur->pad == 2){
+                    padding(temp , 'r' , ' ' , replace , cur->length);
+                } else {
+                    memcpy(replace , temp , cur->length);
+                }
+
+                strcpy(rep_cur->text , replace);
+
+                if( rep_head == NULL ){
+                    rep_head = rep_cur;
+                    rep_tail = rep_cur;
+                    rep_cur->next = rep_cur;
+                } else {
+                    rep_tail->next = rep_cur;
+                    rep_cur->next = rep_head;
+                    rep_tail = rep_cur;
+                }
+            }
+            fclose(rep_fp);
+        } else if ( strncmp( buf , "F7" , 2) == 0 ){
+            cur->type = REPTYPE_F7;
+        }
+        log_write(SYSLOG , LOGINF , "read substution mode[%d]" , cur->type);
+
+        cur->rep_head = rep_head;
+
+        cur->next = ret;
+        ret = cur;
+    }
+    log_write(SYSLOG , LOGINF , "rule file loaded");
+    return ret;
+}
+void clean_rule(rule_st *ruleHead)
+{
+    rule_st *cur = ruleHead;
+    rule_st *nex = ruleHead;
+    rep_st  *rep_cur = NULL;
+
+    while ( cur != NULL ){
+        while( cur->rep_head != NULL){
+            if( cur->rep_head->next == cur->rep_head ){
+                free(cur->rep_head);
+                cur->rep_head = NULL;
+            } else {
+                rep_cur = cur->rep_head->next->next;
+                free(cur->rep_head->next);
+                cur->rep_head->next = rep_cur;
+            }
+        }
+        nex = cur->next;
+        free(cur);
+        cur = nex;
+    }
+    return;
+}
+int get_template(FILE *fp_tpl , tpl_st *mytpl)
+{
+    if ( fread(mytpl->text , 1 , 4 , fp_tpl) < 4){
+        log_write(SYSLOG , LOGERR , "fail to read first 4 bytes from tpl file");
+        return -1;
+    }
+    mytpl->len = get_length(mytpl->text);
+    if ( fread(mytpl->text + 4 , 1 , mytpl->len , fp_tpl) < mytpl->len ){
+        log_write(SYSLOG , LOGERR , "fail to read tpl file , length[%d]" , mytpl->len);
+        return -1;
+    }
+    return 0;
+}
+/*
+    load connection configs from file
+ */
 int conn_config_load(conn_config_st *p_conn_conf)
 {
     FILE *fp = NULL;
@@ -221,6 +398,13 @@ int conn_config_load(conn_config_st *p_conn_conf)
             ENCODING=buf[0];
         }
 
+        /* monitor switch */
+        if (get_bracket(line , 8 , buf , 100)){
+            cur->monitor = 0;
+        } else {
+            cur->monitor = atoi(buf);
+        }
+
         count ++;
         cur->next = p_conn_conf->process_head;
         p_conn_conf->process_head = cur;
@@ -236,7 +420,9 @@ int conn_config_load(conn_config_st *p_conn_conf)
     p_conn_conf->status = 1;
     return 0;
 }
-
+/*
+    free connection config
+ */
 void conn_config_free(conn_config_st *p_conn_conf)
 {
     comm_proc_st *cur , *nex;
@@ -255,66 +441,9 @@ void conn_config_free(conn_config_st *p_conn_conf)
     return ;
 }
 
-int conn_start(conn_config_st *p_conn_conf)
-{
-    int ret = 0;
-    log_write(SYSLOG , LOGINF , "starting conn module");
-    ret = conn_config_load(p_conn_conf);
-    if (ret < 0){
-        log_write(SYSLOG , LOGERR , "fail to load conn.cfg");
-        exit(1);
-    }
-    log_write(SYSLOG , LOGINF , "conn.cfg loaded");
-
-    comm_proc_st *cur = p_conn_conf->process_head;
-
-    if (p_conn_conf == NULL || p_conn_conf->process_head == NULL)
-        return -1;
-
-    while (cur != NULL){
-        if ( cur->type == 'R' ){
-            ret = conn_receiver_start(cur);
-            if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "connection process start fail , TYPE[R] , IP[%s] , PORT[%d]",cur->ip , cur->port);
-            } else {
-                log_write(SYSLOG , LOGINF , "connection process start OK ,  TYPE[R] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
-                cur->pid = ret;
-            }
-
-        } else if ( cur->type == 'S' ){
-            ret = conn_sender_start(cur);
-            if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[S] , IP[%s] , PORT[%d]",cur->ip , cur->port);
-            } else {
-                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[S] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
-                cur->pid = ret;
-            }
-        } else if ( cur->type == 'J' ){
-            ret = conn_jips_start(cur);
-            if ( ret < 0 ){
-                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[J] , IP[%s] , PORT[%d]",cur->ip , cur->port);
-            } else {
-                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[J] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
-                cur->pid = ret;
-            }
-        } else if ( cur->type == 'X' ){
-            int i = 0 ;
-            for ( i = 0 ; i < cur->parallel ; i ++ ){
-                ret = conn_sender_start(cur);
-                if ( ret < 0 ){
-                    log_write(SYSLOG , LOGERR , "connection process start OK , TYPE[X] , IP[%s] , PORT[%d]",cur->ip , cur->port);
-                } else {
-                    log_write(SYSLOG , LOGINF , "connection process start fail ,  TYPE[X] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
-                    cur->para_pids[i] = ret;
-                }
-            }
-        }
-        cur = cur->next;
-    }
-    p_conn_conf->status = RUNNING;
-    return 0;
-}
-
+/*
+    start receiver process
+ */
 int conn_receiver_start(comm_proc_st *p_receiver)
 {
     int pid;
@@ -327,24 +456,33 @@ int conn_receiver_start(comm_proc_st *p_receiver)
 
     signal( SIGTERM , conn_receiver_signal_handler);
 
-    int server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
-    struct sockaddr_in server_sockaddr;
-    char buffer[MAX_LINE_LEN];
+    int             server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
+    struct          sockaddr_in server_sockaddr;
+    char            buffer[MAX_LINE_LEN];
     struct sockaddr_in client_addr;
-    socklen_t socket_len = sizeof(client_addr);
-    int recvlen = 0;
-    int textlen = 0;
-    int nTotal = 0;
-    int nRead = 0;
-    int nLeft = 0;
-    int nTranlen = 0;
-    int ret = 0;
-    struct timeval ts;
+    socklen_t       socket_len = sizeof(client_addr);
+    int             recvlen = 0;
+    int             textlen = 0;
+    int             nTotal = 0;
+    int             nRead = 0;
+    int             nLeft = 0;
+    int             nTranlen = 0;
+    int             ret = 0;
+    struct timeval  ts;
 
-    redisReply* reply = NULL;
-    char   redisMatchupKey[100];
-    char   trannum[4+1];
-    char   retcode[6+1];
+    redisReply      *reply = NULL;
+    char            redisMatchupKey[100];
+    char            trannum[4+1];
+    char            retcode[6+1];
+    redisContext    *c = NULL;
+
+    if ( p_receiver->monitor == 1 ){
+        redisContext *c = redisConnect("127.0.0.1", 6379);
+        if(c->err) {
+            log_write(SYSLOG, LOGERR, "redis server not found : %s\n", c->errstr);
+            exit(1);
+        }
+    }
 
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_port = htons(p_receiver->port);
@@ -353,7 +491,6 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     {
         log_write(CONLOG , LOGERR , "bind port[%d] fail" , p_receiver->port);
         close(server_sockfd);
-        conn_report_status( CONN_BINDFAIL );
         exit(1);
     }
     log_write(CONLOG , LOGINF , "bind port[%d] OK" , p_receiver->port);
@@ -373,13 +510,6 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     }
     conn_report_status( CONN_ESTABLISHED );
     log_write(CONLOG , LOGINF , "accept on port[%d] OK" , p_receiver->port);
-
-    /*
-     connect to redis server
-     */
-    redisContext *c = redisConnect("127.0.0.1", 6379);
-    if(c->err)   
-        log_write(SYSLOG, LOGERR, "redis server not found : %s\n", c->errstr);
 
     while(1){
         memset(buffer , 0x00 , sizeof(buffer));
@@ -410,46 +540,48 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         /* debug */
         usleep(100);
 
-        gettimeofday( &ts , NULL );
-        /*
-         update tps
-         */
-        reply = redisCommand(c, "incr recvtps|%d" , ts.tv_sec );
-        freeReplyObject(reply);
-        /*
-         match up / average response time / successful rate
-         */
-        memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
-        memset( trannum , 0x00 , sizeof(trannum) );
-        memset( retcode , 0x00 , sizeof(retcode) );
-
-        if ( getTranInfo(buffer, redisMatchupKey, trannum, retcode) == 0 ){
-            reply = redisCommand(c, "hget %s tv_sec" , redisMatchupKey);
-            if ( reply->type == REDIS_REPLY_NIL ){
-                freeReplyObject(reply);
-                log_write(CONLOG, LOGERR, "[%s] matchup fail", redisMatchupKey);
-            } else {
-                int second = atoi(reply->str);
-                freeReplyObject(reply);
-                reply = redisCommand(c, "hget %s tv_usec" , redisMatchupKey);
-                int usec = atoi(reply->str);
-                freeReplyObject(reply);
-                int duration = (ts.tv_sec - second)*1000000 + ts.tv_usec - usec;
-
-                reply = redisCommand( c , "del %s", redisMatchupKey);
-                freeReplyObject(reply);
-                reply = redisCommand( c , "incr trac|%s|total", trannum);
-                freeReplyObject(reply);
-                reply = redisCommand( c , "incrby trac|%s|duration %d", trannum , duration);
-                freeReplyObject(reply);
-
-                if ( strlen(retcode) && atoi(retcode) == 0 ){
-                    reply = redisCommand( c , "incr trac|%s|suc", trannum);
+        if( p_receiver->monitor == 1 ){
+            gettimeofday( &ts , NULL );
+            /* update tps */
+            reply = redisCommand(c, "incr recvtps|%d" , ts.tv_sec );
+            freeReplyObject(reply);
+            /* match up / average response time / successful rate */
+            memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
+            memset( trannum , 0x00 , sizeof(trannum) );
+            memset( retcode , 0x00 , sizeof(retcode) );
+    
+            if ( getTranInfo(buffer, redisMatchupKey, trannum, retcode) == 0 ){
+                reply = redisCommand(c, "hget %s tv_sec" , redisMatchupKey);
+                if ( reply->type == REDIS_REPLY_NIL ){
                     freeReplyObject(reply);
+                    log_write(CONLOG, LOGERR, "[%s] matchup fail", redisMatchupKey);
+                } else {
+                    int second = atoi(reply->str);
+                    freeReplyObject(reply);
+
+                    reply = redisCommand(c, "hget %s tv_usec" , redisMatchupKey);
+                    int usec = atoi(reply->str);
+                    freeReplyObject(reply);
+
+                    int duration = (ts.tv_sec - second)*1000000 + ts.tv_usec - usec;
+    
+                    reply = redisCommand( c , "del %s", redisMatchupKey);
+                    freeReplyObject(reply);
+
+                    reply = redisCommand( c , "incr trac|%s|total", trannum);
+                    freeReplyObject(reply);
+
+                    reply = redisCommand( c , "incrby trac|%s|duration %d", trannum , duration);
+                    freeReplyObject(reply);
+    
+                    if ( strlen(retcode) && atoi(retcode) == 0 ){
+                        reply = redisCommand( c , "incr trac|%s|suc", trannum);
+                        freeReplyObject(reply);
+                    }
                 }
+            } else {
+                log_write(CONLOG, LOGERR , "unpack error");
             }
-        } else {
-            log_write(CONLOG, LOGERR , "unpack error");
         }
 
         if ( p_receiver->persist == 1 ){
@@ -465,16 +597,20 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         }
     }
     close(sock_recv);
-    return 0;
+    exit(0);
 }
-
+/*
+    receiver signal handler
+ */
 void conn_receiver_signal_handler(int no)
 {
     log_write(CONLOG , LOGDBG , "into conn_receiver_signal_handler , signo[%d]" , no);
     close(sock_recv);
     exit(0);
 }
-
+/*
+    start connection sender process
+ */
 int conn_sender_start(comm_proc_st *p_sender)
 {
     int pid;
@@ -504,15 +640,17 @@ int conn_sender_start(comm_proc_st *p_sender)
     int nTranlen = 0;
     char buffer[MAX_LINE_LEN];
 
-    redisReply* reply = NULL;
-    char   redisMatchupKey[100];
+    redisReply      *reply = NULL;
+    char            redisMatchupKey[100];
+    redisContext    *c = NULL;
 
-    /*
-     connect to redis server
-     */
-    redisContext *c = redisConnect("127.0.0.1", 6379);
-    if(c->err)   
-        log_write(SYSLOG, LOGERR, "connection error:%s\n", c->errstr);
+    if ( p_sender->monitor == 1 ){
+        c = redisConnect("127.0.0.1", 6379);
+        if(c->err){
+            log_write(SYSLOG, LOGERR, "connection error:%s\n", c->errstr);
+            exit(1);
+        }
+    }
 
     int connected = 0;
     while(1){
@@ -578,26 +716,20 @@ int conn_sender_start(comm_proc_st *p_sender)
         }
         log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
 
-        gettimeofday(&ts , NULL);
-        /* 
-         match up
-         for fixed transaction , key should be "matchup|trannum|seqnum"
-         for 8583. transaction , key should be "matchup|f2+f7+f11+f32+f33"
-         value should be tv_sec:xxx tv_usec:yyy
-         */
-        if ( p_sender->type != 'X' ){
-            memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
-            if ( getTranInfo(msgs.text, redisMatchupKey, NULL ,  NULL) == 0 ){
-                reply = redisCommand(c, "hmset %s tv_sec %d tv_usec %d " , redisMatchupKey , ts.tv_sec  , ts.tv_usec);
-                freeReplyObject(reply);
-            }
+        if ( p_sender->monitor == 1 ){
+            gettimeofday(&ts , NULL);
+            /* insert match up info */
+            if ( p_sender->type != 'X' ){
+                memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
+                if ( getTranInfo(msgs.text, redisMatchupKey, NULL ,  NULL) == 0 ){
+                    reply = redisCommand(c, "hmset %s tv_sec %d tv_usec %d " , redisMatchupKey , ts.tv_sec  , ts.tv_usec);
+                    freeReplyObject(reply);
+                }
+            }  
+            /* update sendtps */
+            reply = redisCommand(c, "incr sendtps|%d" , ts.tv_sec );
+            freeReplyObject(reply);
         }
-
-        /*
-         update sendtps
-         */
-        reply = redisCommand(c, "incr sendtps|%d" , ts.tv_sec );
-        freeReplyObject(reply);
 
         if ( p_sender->persist == 1 ){
             if ( p_sender->type == 'S' )
@@ -661,8 +793,11 @@ int conn_sender_start(comm_proc_st *p_sender)
         }
     }
     close(sock_send);
-    return 0;
+    exit(0);
 }
+/*
+    sender signal handler
+ */
 void conn_sender_signal_handler(int no)
 {
     switch(no){
@@ -673,6 +808,9 @@ void conn_sender_signal_handler(int no)
             return;
     }
 }
+/*
+    start connection jips process
+ */
 int conn_jips_start(comm_proc_st *p_jips)
 {
     int pid;
@@ -846,7 +984,9 @@ int conn_jips_start(comm_proc_st *p_jips)
         }
     }
 }
-
+/*
+    jips signal handler
+ */
 void conn_jips_signal_handler(int signo)
 {
     kill( pidRecv , SIGTERM);
@@ -854,38 +994,9 @@ void conn_jips_signal_handler(int signo)
     log_write(CONLOG , LOGINF , "killing pidRecv[%d] , pidSend[%d]" , pidRecv , pidSend);
     exit(0);
 }
-
-int conn_stop(conn_config_st *p_conn_conf)
-{
-    comm_proc_st *cur;
-
-    if (p_conn_conf == NULL){
-        return -1;
-    }
-
-    cur = p_conn_conf->process_head;
-    while (cur != NULL){
-        if ( cur->type == 'X' ){
-            int i = 0;
-            for ( i = 0 ;i < cur->parallel ; i ++ ){
-                if (cur->para_pids[i] > 0 ){
-                    kill(cur->para_pids[i] , SIGTERM);
-                    log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
-                }
-            }
-        } else {
-            if ( cur->pid > 0 ){
-                kill(cur->pid , SIGTERM);
-                log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
-            }
-
-        }
-        cur=cur->next;
-    }
-    p_conn_conf->status = NOTLOADED;
-    return 0;
-}
-
+/*
+    report connection process status to deamon
+ */
 void conn_report_status( int status )
 {
     struct sockaddr_in servaddr;
@@ -910,13 +1021,18 @@ void conn_report_status( int status )
     close(sock);
     return;
 }
-
+/*
+    send idle message    
+*/
 void conn_send_idle(int signo)
 {
     send(sock_send , "0000" , 4 , 0);
     siglongjmp(jmpbuf , 1);
 }
 
+/*
+    load packing module configs
+ */
 int pack_config_load( char *filename , pack_config_st *p_pack_conf)
 {
     char     config_fn[MAX_FILENAME_LEN];
@@ -1029,7 +1145,9 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
     log_write(SYSLOG , LOGDBG , "packing config loaded");
     return 0;
 }
-
+/*
+    free packing configs
+ */
 int pack_config_free(pack_config_st *p_pack_conf)
 {
     pack_config_st *cur = p_pack_conf;
@@ -1049,71 +1167,6 @@ int pack_config_free(pack_config_st *p_pack_conf)
         if ( pit_del )
             free(pit_del);
     }
-
-    return 0;
-}
-
-int pack_load(char *msg , pack_config_st *p_pack_conf)
-{
-    /* laod config from file */
-    int  i = 4;
-    char buf[20];
-    int ret = 0;
-    memset(buf , 0x00 , sizeof(buf));
-    /* skip spaces */
-    while ( msg[i] == ' '){
-        i ++;
-    }
-    if ( strlen(msg) <= 5 ){
-        strcpy(buf , "pack.cfg");
-    } else {
-        strcpy(buf , msg+i);
-    }
-
-    ret = pack_config_load( buf , p_pack_conf );
-    if ( ret ){
-        return -1;
-    }
-    pit_proc_st *cur = p_pack_conf->pit_head;
-    while ( cur != NULL ) {
-        pack_pit_load(g_stat+cur->index , cur);
-        cur = cur->next;
-    }
-    p_pack_conf->status = LOADED;
-
-    return 0;
-}
-
-int pack_send(pack_config_st *p_pack_conf)
-{
-    pit_proc_st *cur = p_pack_conf->pit_head;
-    /* start pitchers */
-    while ( cur != NULL ) {
-        cur->pid = pack_pit_start(cur);
-        log_write(SYSLOG , LOGINF , "packing process start,PID[%d]" ,cur->pid);
-        cur = cur->next;
-    }
-    p_pack_conf->status = RUNNING;
-
-    return 0;
-}
-
-int pack_shut(pack_config_st *p_pack_conf)
-{
-    pit_proc_st     *pit_cur = p_pack_conf->pit_head;
-    stat_st         *l_stat = NULL;
-
-    while ( pit_cur != NULL ){
-        if( pit_cur->pid > 0 ){
-            kill(pit_cur->pid , SIGTERM);
-            l_stat = g_stat+pit_cur->index;
-            l_stat->tag = FINISHED;
-            log_write(SYSLOG , LOGINF , "packing process stop,pid[%d]" , pit_cur->pid);
-        }
-        pit_cur = pit_cur->next;
-    }
-
-    p_pack_conf->status = FINISHED;
 
     return 0;
 }
@@ -1175,14 +1228,14 @@ int pack_pit_start(pit_proc_st *p_pitcher)
 
     /* load template */
     memset(&mytpl , 0x00 , sizeof(mytpl));
-    if (deamon_get_template(p_pitcher->tpl_fp , &mytpl)){
+    if (get_template(p_pitcher->tpl_fp , &mytpl)){
         log_write(PCKLOG , LOGERR , "load tpl file fail");
         fclose(p_pitcher->tpl_fp);
         exit(-1);
     }
     log_write(PCKLOG , LOGDBG , "tpl file loaded");
     /* load rules */
-    ruleHead = deamon_get_rule(p_pitcher->rule_fp);
+    ruleHead = get_rule(p_pitcher->rule_fp);
     if (ruleHead == NULL){
         log_write(PCKLOG , LOGERR , "load rule file fail");
         fclose(p_pitcher->rule_fp);
@@ -1255,7 +1308,7 @@ int pack_pit_start(pit_proc_st *p_pitcher)
             usleep( timeIntervalUs - tv_interval.tv_usec );
     }
     l_stat->tag = FINISHED;
-    //deamon_clean_rule(ruleHead);
+    //clean_rule(ruleHead);
     exit(0);
 }
 void pack_pit_signal_handler(int signo)
@@ -1263,178 +1316,168 @@ void pack_pit_signal_handler(int signo)
     pack_pit_quit = 1;
     return ;
 }
-
-rule_st *deamon_get_rule(FILE *fp)
+/*
+    stop connection module
+ */
+int command_conn_stop(conn_config_st *p_conn_conf)
 {
-    char      line[150];
-    char      buf[100];
-    char      pathname[MAX_PATHNAME_LEN];
+    comm_proc_st *cur;
 
-    char      temp[MAX_LINE_LEN];
-    char      replace[MAX_REP_LEN];
-    FILE      *rep_fp = NULL;
-    rep_st    *rep_head = NULL;
-    rep_st    *rep_tail = NULL;
-    rep_st    *rep_cur = NULL;
-
-    rule_st *cur = NULL;
-    rule_st *ret = NULL;
-
-    memset(line , 0x00 , sizeof(line));
-    memset(buf , 0x00 , sizeof(buf));
-
-    log_write(SYSLOG , LOGINF , "start to load rule file");
-
-    while( fgets(line , sizeof(line) , fp) != NULL ){
-
-        if ( line[0] == '\n' || line[0] == '#' )
-            continue;
-
-        cur = (rule_st *)malloc(sizeof(rule_st));
-        if ( cur == NULL ){
-            log_write(SYSLOG , LOGERR , "malloc for rule_st fail");
-            fclose(fp);
-            return NULL;
-        }
-
-        memset(cur , 0x00 , sizeof(rule_st));
-
-        if (get_bracket(line , 1 , buf , 100))
-        {
-            log_write(SYSLOG , LOGERR , "format error in field1[start position]");
-            return NULL;
-        }
-        cur->start = atoi(buf);
-        log_write(SYSLOG , LOGINF , "read start position[%d]" , cur->start);
-
-        if (get_bracket(line , 2 , buf , 100))
-        {
-            log_write(SYSLOG , LOGERR , "format error in field2[substution length]");
-            return NULL;
-        }
-        cur->length = atoi(buf);
-        log_write(SYSLOG , LOGINF , "read substution length[%d]" , cur->length);
-
-        if (get_bracket(line , 3 , buf , 100))
-        {
-            log_write(SYSLOG , LOGERR , "format error in field3[padding mode]");
-            return NULL;
-        }
-        cur->pad = atoi(buf);
-        log_write(SYSLOG , LOGINF , "read padding mode[%d]" , cur->pad);
-
-        if (get_bracket(line , 4 , buf , 100))
-        {
-            log_write(SYSLOG , LOGERR , "format error in field4[substution mode]");
-            return NULL;
-        }
-        if ( strncmp( buf , "RAND" , 4 ) == 0  ){
-            cur->type = REPTYPE_RANDOM;
-        } else if ( strncmp( buf , "FILE:" , 5) == 0 || strncmp( buf, "PIN:" , 4) == 0 ){
-            if ( strncmp( buf , "FILE:" , 5) == 0 ){
-                cur->type = REPTYPE_FILE;
-                memset(pathname , 0x00 , sizeof(pathname));
-                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+5);
-            }
-            else{
-                cur->type = REPTYPE_PIN;
-                memset(pathname , 0x00 , sizeof(pathname));
-                sprintf(pathname , "%s/data/rep/%s" , getenv("PRESS_HOME") , buf+4);
-            }
-            rep_fp = fopen(pathname , "r");
-            if (rep_fp == NULL){
-                log_write(SYSLOG , LOGERR , "rep_file[%s] not found",pathname);
-                return NULL;
-            }
-
-            memset(temp , 0x00 , sizeof(temp));
-            rep_head = NULL;
-            rep_tail = NULL;
-            rep_cur = NULL;
-            while( fscanf( rep_fp , "%s" , temp) != EOF ){
-                rep_cur = (rep_st *)malloc(sizeof(rep_st));
-                if (rep_cur == NULL){
-                    log_write(SYSLOG , LOGERR , "loading replace file , malloc fail ");
-                    fclose(rep_fp);
-                    return NULL;
-                }
-
-                /* do paddings */
-                memset( replace , 0x00 , MAX_REP_LEN );
-                if (cur->pad == 1){
-                    padding(temp, 'l' , '0' , replace , cur->length);
-                } else if (cur->pad == 2){
-                    padding(temp , 'r' , ' ' , replace , cur->length);
-                } else {
-                    memcpy(replace , temp , cur->length);
-                }
-
-                strcpy(rep_cur->text , replace);
-
-                if( rep_head == NULL ){
-                    rep_head = rep_cur;
-                    rep_tail = rep_cur;
-                    rep_cur->next = rep_cur;
-                } else {
-                    rep_tail->next = rep_cur;
-                    rep_cur->next = rep_head;
-                    rep_tail = rep_cur;
-                }
-            }
-            fclose(rep_fp);
-        } else if ( strncmp( buf , "F7" , 2) == 0 ){
-            cur->type = REPTYPE_F7;
-        }
-        log_write(SYSLOG , LOGINF , "read substution mode[%d]" , cur->type);
-
-        cur->rep_head = rep_head;
-
-        cur->next = ret;
-        ret = cur;
+    if (p_conn_conf == NULL){
+        return -1;
     }
-    log_write(SYSLOG , LOGINF , "rule file loaded");
-    return ret;
+
+    cur = p_conn_conf->process_head;
+    while (cur != NULL){
+        if ( cur->type == 'X' ){
+            int i = 0;
+            for ( i = 0 ;i < cur->parallel ; i ++ ){
+                if (cur->para_pids[i] > 0 ){
+                    kill(cur->para_pids[i] , SIGTERM);
+                    log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
+                }
+            }
+        } else {
+            if ( cur->pid > 0 ){
+                kill(cur->pid , SIGTERM);
+                log_write(SYSLOG , LOGINF , "connection process pid[%d] stop OK", cur->pid);
+            }
+
+        }
+        cur=cur->next;
+    }
+    p_conn_conf->status = NOTLOADED;
+    return 0;
 }
-
-int deamon_get_template(FILE *fp_tpl , tpl_st *mytpl)
+/*
+    start connection module
+ */
+int command_conn_start(conn_config_st *p_conn_conf)
 {
-    if ( fread(mytpl->text , 1 , 4 , fp_tpl) < 4){
-        log_write(SYSLOG , LOGERR , "fail to read first 4 bytes from tpl file");
-        return -1;
+    int ret = 0;
+    log_write(SYSLOG , LOGINF , "starting conn module");
+    ret = conn_config_load(p_conn_conf);
+    if (ret < 0){
+        log_write(SYSLOG , LOGERR , "fail to load conn.cfg");
+        exit(1);
     }
-    mytpl->len = get_length(mytpl->text);
-    if ( fread(mytpl->text + 4 , 1 , mytpl->len , fp_tpl) < mytpl->len ){
-        log_write(SYSLOG , LOGERR , "fail to read tpl file , length[%d]" , mytpl->len);
+    log_write(SYSLOG , LOGINF , "conn.cfg loaded");
+
+    comm_proc_st *cur = p_conn_conf->process_head;
+
+    if (p_conn_conf == NULL || p_conn_conf->process_head == NULL)
         return -1;
+
+    while (cur != NULL){
+        if ( cur->type == 'R' ){
+            ret = conn_receiver_start(cur);
+            if ( ret < 0 ){
+                log_write(SYSLOG , LOGERR , "connection process start fail , TYPE[R] , IP[%s] , PORT[%d]",cur->ip , cur->port);
+            } else {
+                log_write(SYSLOG , LOGINF , "connection process start OK ,  TYPE[R] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                cur->pid = ret;
+            }
+
+        } else if ( cur->type == 'S' ){
+            ret = conn_sender_start(cur);
+            if ( ret < 0 ){
+                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[S] , IP[%s] , PORT[%d]",cur->ip , cur->port);
+            } else {
+                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[S] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                cur->pid = ret;
+            }
+        } else if ( cur->type == 'J' ){
+            ret = conn_jips_start(cur);
+            if ( ret < 0 ){
+                log_write(SYSLOG , LOGERR , "connection process start fail TYPE[J] , IP[%s] , PORT[%d]",cur->ip , cur->port);
+            } else {
+                log_write(SYSLOG , LOGINF , "connection process start OK TYPE[J] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                cur->pid = ret;
+            }
+        } else if ( cur->type == 'X' ){
+            int i = 0 ;
+            for ( i = 0 ; i < cur->parallel ; i ++ ){
+                ret = conn_sender_start(cur);
+                if ( ret < 0 ){
+                    log_write(SYSLOG , LOGERR , "connection process start OK , TYPE[X] , IP[%s] , PORT[%d]",cur->ip , cur->port);
+                } else {
+                    log_write(SYSLOG , LOGINF , "connection process start fail ,  TYPE[X] , IP[%s] , PORT[%d] , PID[%d]",cur->ip , cur->port , ret);
+                    cur->para_pids[i] = ret;
+                }
+            }
+        }
+        cur = cur->next;
     }
+    p_conn_conf->status = RUNNING;
     return 0;
 }
 
-void deamon_clean_rule(rule_st *ruleHead)
+int command_pack_load(char *msg , pack_config_st *p_pack_conf)
 {
-    rule_st *cur = ruleHead;
-    rule_st *nex = ruleHead;
-    rep_st  *rep_cur = NULL;
-
-    while ( cur != NULL ){
-        while( cur->rep_head != NULL){
-            if( cur->rep_head->next == cur->rep_head ){
-                free(cur->rep_head);
-                cur->rep_head = NULL;
-            } else {
-                rep_cur = cur->rep_head->next->next;
-                free(cur->rep_head->next);
-                cur->rep_head->next = rep_cur;
-            }
-        }
-        nex = cur->next;
-        free(cur);
-        cur = nex;
+    /* laod config from file */
+    int  i = 4;
+    char buf[20];
+    int ret = 0;
+    memset(buf , 0x00 , sizeof(buf));
+    /* skip spaces */
+    while ( msg[i] == ' '){
+        i ++;
     }
-    return;
+    if ( strlen(msg) <= 5 ){
+        strcpy(buf , "pack.cfg");
+    } else {
+        strcpy(buf , msg+i);
+    }
+
+    ret = pack_config_load( buf , p_pack_conf );
+    if ( ret ){
+        return -1;
+    }
+    pit_proc_st *cur = p_pack_conf->pit_head;
+    while ( cur != NULL ) {
+        pack_pit_load(g_stat+cur->index , cur);
+        cur = cur->next;
+    }
+    p_pack_conf->status = LOADED;
+
+    return 0;
 }
 
-char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
+int command_pack_send(pack_config_st *p_pack_conf)
+{
+    pit_proc_st *cur = p_pack_conf->pit_head;
+    /* start pitchers */
+    while ( cur != NULL ) {
+        cur->pid = pack_pit_start(cur);
+        log_write(SYSLOG , LOGINF , "packing process start,PID[%d]" ,cur->pid);
+        cur = cur->next;
+    }
+    p_pack_conf->status = RUNNING;
+
+    return 0;
+}
+
+int command_pack_shut(pack_config_st *p_pack_conf)
+{
+    pit_proc_st     *pit_cur = p_pack_conf->pit_head;
+    stat_st         *l_stat = NULL;
+
+    while ( pit_cur != NULL ){
+        if( pit_cur->pid > 0 ){
+            kill(pit_cur->pid , SIGTERM);
+            l_stat = g_stat+pit_cur->index;
+            l_stat->tag = FINISHED;
+            log_write(SYSLOG , LOGINF , "packing process stop,pid[%d]" , pit_cur->pid);
+        }
+        pit_cur = pit_cur->next;
+    }
+
+    p_pack_conf->status = FINISHED;
+
+    return 0;
+}
+
+char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
 {
     char *ret = (char *)malloc(MAX_REPLY_LEN);
     int offset = 0;
@@ -1473,9 +1516,6 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
                         switch ( p_comm->status ){
                             case CONN_ESTABLISHED:
                                 strcpy( status , "ESTABLISHED");
-                                break;
-                            case CONN_BINDFAIL:
-                                strcpy( status , "BIND FAIL");
                                 break;
                             default:
                                 strcpy( status , "NOT READY");
@@ -1552,14 +1592,14 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
     if ( flag & STAT_MONI ){
         if ( p_pack_conf->status == RUNNING ) {
             /* connect to redis*/        
-            offset += sprintf(ret+offset , \
-                    "REAL TIME MONITOR\n");
-            offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
             redisContext *c = redisConnect("127.0.0.1", 6379);
             if(c->err){
                 offset += sprintf(ret+offset , "redis error : %s\n" , c->errstr);
             } else {
+                offset += sprintf(ret+offset , \
+                    "\nMONITOR-TPS\n");
+                offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
                 redisReply *reply = NULL;
                 redisReply *reply1 = NULL;
                 int sendtps = 0;
@@ -1586,6 +1626,11 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
                     offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
                         temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
                 }
+
+                offset += sprintf(ret+offset , \
+                    "\nMONITOR-REPONSE\n");
+                offset += sprintf(ret+offset , \
+                    "===========================================================================\n");
                 /* successful ratio */
                 reply = redisCommand( c , "keys trac*total");
                 if ( reply->type != REDIS_REPLY_NIL ){
@@ -1618,7 +1663,7 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
     return ret;
 }
 
-char *deamon_adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
+char *command_adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
 {
     char *ret = (char *)malloc(MAX_REPLY_LEN);
     int i = 0; 
@@ -1714,7 +1759,7 @@ char *deamon_adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
     return ret;
 }
 
-char *deamon_adjust_para( char *msg , conn_config_st *p_conn_config)
+char *command_adjust_para( char *msg , conn_config_st *p_conn_config)
 {
     int new_para = 0;
     comm_proc_st *shortconn = p_conn_config->process_head;
@@ -1758,7 +1803,22 @@ char *deamon_adjust_para( char *msg , conn_config_st *p_conn_config)
     }
     return ret;
 }
-
+void command_update_conn_status( char *buffer_cmd , conn_config_st *p_conn_conf )
+{
+    int pid = 0;
+    int status = 0;
+    sscanf( buffer_cmd+7 , "%d %d" , &pid , &status);
+    log_write(SYSLOG, LOGINF, "update conn status [%d][%d]", pid , status);
+    comm_proc_st *temp = p_conn_conf->process_head;
+    while ( temp ){
+        if ( temp->pid == pid ){
+            temp->status = status;
+            break;
+        }
+        temp = temp->next;
+    }
+    return;
+}
 void deamon_status_op(int flag , int id , int adjustment , int percent , int direc , int *before , int *after)
 {
     stat_st *l_stat = g_stat + id;
@@ -1886,22 +1946,6 @@ void deamon_print_help()
     printf("       -p specify listening port for command(default:6043)\n");
     printf("       -l specify log level[1-7](default:4)\n");
     return ;
-}
-void deamon_udpate_conn_status( char *buffer_cmd , conn_config_st *p_conn_conf )
-{
-    int pid = 0;
-    int status = 0;
-    sscanf( buffer_cmd+7 , "%d %d" , &pid , &status);
-    log_write(SYSLOG, LOGINF, "update conn status [%d][%d]", pid , status);
-    comm_proc_st *temp = p_conn_conf->process_head;
-    while ( temp ){
-        if ( temp->pid == pid ){
-            temp->status = status;
-            break;
-        }
-        temp = temp->next;
-    }
-    return;
 }
 int main(int argc , char *argv[])
 {
@@ -2036,46 +2080,46 @@ int main(int argc , char *argv[])
             if (p_conn_conf->status == RUNNING){
                 send( sock_recv , "exec [init] fail , connection module already started" , MAX_CMD_LEN , 0);
             } else {
-                conn_start(p_conn_conf);
+                command_conn_start(p_conn_conf);
                 send( sock_recv , "exec [init] OK , enter [stat] to check out" , MAX_CMD_LEN , 0 );
             }
         } else if ( strncmp(buffer_cmd , "stop" , 4) == 0 ){
             if (p_conn_conf->status != RUNNING){
                 send( sock_recv , "exec [stop] fail , connection module not started" , MAX_CMD_LEN , 0);
             } else {
-                conn_stop(p_conn_conf);
+                command_conn_stop(p_conn_conf);
                 send( sock_recv , "exec [stop] OK , connection module is stopped" , MAX_CMD_LEN , 0);
             }
         } else if ( strncmp(buffer_cmd , "send" , 4) == 0 ) {
             if ( p_pack_conf->status != LOADED ){
                 send( sock_recv , "exec [send] fail , enter [load] to load packing config first" , MAX_CMD_LEN , 0);
             } else {
-                pack_send(p_pack_conf);
+                command_pack_send(p_pack_conf);
                 send( sock_recv , "exec [send] OK , enter [stat/moni] to check out" , MAX_CMD_LEN , 0);
             }
         } else if ( strncmp(buffer_cmd , "shut" , 4) == 0){
-            pack_shut(p_pack_conf);
+            command_pack_shut(p_pack_conf);
             send( sock_recv , "exec [shut] OK , packing module is stopped" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "kill" , 4) == 0 ){
-            if (pack_shut(p_pack_conf) ) {
+            if (command_pack_shut(p_pack_conf) ) {
                 log_write(SYSLOG , LOGERR ,"packing module stop fail");
             }
-            if ( conn_stop(p_conn_conf) ){
+            if ( command_conn_stop(p_conn_conf) ){
                 log_write(SYSLOG , LOGERR ,"connection module stop fail");
             }
             send( sock_recv , "exec [kill] OK , deamon process quitting" , MAX_CMD_LEN , 0);
             close(sock_recv);
             deamon_exit();
         } else if ( strncmp(buffer_cmd , "stat" , 4) == 0){
-            retmsg = deamon_get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
+            retmsg = command_get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
             free(retmsg);
         } else if ( strncmp(buffer_cmd , "moni" , 4) == 0){
-            retmsg = deamon_get_stat( STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
+            retmsg = command_get_stat( STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
             free(retmsg);
         } else if ( strncmp(buffer_cmd , "load" , 4) == 0){
-            if ( pack_load(buffer_cmd , p_pack_conf) ){
+            if ( command_pack_load(buffer_cmd , p_pack_conf) ){
                 send( sock_recv , "exec [load] fail" , MAX_CMD_LEN , 0);
             } else {
                 send( sock_recv , "exec [load] OK , enter [stat] to check out" , MAX_CMD_LEN , 0);
@@ -2084,7 +2128,7 @@ int main(int argc , char *argv[])
             if ( p_pack_conf->status == NOTLOADED  || p_pack_conf->status == FINISHED ){
                 send( sock_recv , "exec [tps] fail , enter [load] to load packing configs first" , MAX_CMD_LEN , 0);
             } else {
-                retmsg = deamon_adjust_status( 1 , buffer_cmd , p_pack_conf);
+                retmsg = command_adjust_status( 1 , buffer_cmd , p_pack_conf);
                 send( sock_recv , retmsg , MAX_CMD_LEN , 0);
                 free(retmsg);
             }
@@ -2092,7 +2136,7 @@ int main(int argc , char *argv[])
             if ( p_pack_conf->status == NOTLOADED || p_pack_conf->status == FINISHED ){
                 send( sock_recv , "exec [tps] fail , enter [load] to load packing configs first" , MAX_CMD_LEN , 0);
             } else {
-                retmsg = deamon_adjust_status( 2 , buffer_cmd , p_pack_conf);
+                retmsg = command_adjust_status( 2 , buffer_cmd , p_pack_conf);
                 send( sock_recv , retmsg , MAX_CMD_LEN , 0);
                 free(retmsg);
             }
@@ -2100,13 +2144,13 @@ int main(int argc , char *argv[])
             if ( p_conn_conf->status != RUNNING ){
                 send( sock_recv , "exec [para] fail , enter [init] to start connection module first" , MAX_CMD_LEN , 0);
             }
-            retmsg = deamon_adjust_para( buffer_cmd , p_conn_conf);
+            retmsg = command_adjust_para( buffer_cmd , p_conn_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
             free(retmsg);
         } else if ( strncmp( buffer_cmd , "list" , 4) == 0 ){
             send( sock_recv , "OK" , MAX_CMD_LEN , 0);
         } else if ( strncmp( buffer_cmd , "report" , 6) == 0 ){
-            deamon_udpate_conn_status(buffer_cmd , p_conn_conf);
+            command_update_conn_status(buffer_cmd , p_conn_conf);
         }
         close(sock_recv);
     }

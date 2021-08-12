@@ -1,4 +1,4 @@
-INCPATH = ../include
+INCPATH = include
 LIBPATH = ../lib
 BINPATH = ../bin
 LIBS = -lhiredis

@@ -16,7 +16,6 @@
 #define MAX_PROC_NUM    40
 #define MAX_PARA_NUM    500
 
-#define CONN_BINDFAIL      -1
 #define CONN_NOTREADY       0
 #define CONN_ESTABLISHED	1
 
@@ -43,6 +42,7 @@ typedef struct comm_proc{
     int     parallel;               /*parallel number*/
     pid_t   para_pids[MAX_PARA_NUM];/*pids*/
     int     status;					/*connection status*/
+    int     monitor;				/*monitor switch*/
 	struct 	comm_proc *next;		/*next process*/
 }comm_proc_st;
 
@@ -99,42 +99,34 @@ typedef struct mystat{
 }stat_st;
 
 int			getTranInfo( char *message  , char *key  , char *trannum , char *retcode );
-int         sem_init();
-void        sem_destroy(int);
-int         sem_lock(int);
-int         sem_unlock(int);
 int         persist(char *text , int len , char type , struct timeval ts);
+rule_st    *get_rule(FILE *fp);
+void        clean_rule(rule_st *ruleHead);
+int         get_template(FILE *fp_tpl , tpl_st *mytpl);
 int         conn_config_load(conn_config_st *);
 void        conn_config_free(conn_config_st *);
-int         conn_start(conn_config_st *);
 int         conn_receiver_start(comm_proc_st *);
 void        conn_receiver_signal_handler(int no);
 int         conn_sender_start(comm_proc_st *);
 void        conn_sender_signal_handler(int no);
 int         conn_jips_start(comm_proc_st *p_jips);
 void        conn_jips_signal_handler(int signo);
-int         conn_stop(conn_config_st *);
 void        conn_report_status( int );
 void        conn_send_idle(int);
 int         pack_config_load(char *filename , pack_config_st *p_pack_conf);
 int         pack_config_free(pack_config_st *p_pack_conf);
-int         pack_load(char *msg , pack_config_st *p_pack_conf);
-int         pack_send(pack_config_st *p_pack_conf);
-int         pack_shut(pack_config_st *p_pack_conf);
 void        pack_pit_load(stat_st *l_stat , pit_proc_st *p_pitcher);
 int         pack_pit_start(pit_proc_st *p_pitcher);
 void        pack_pit_signal_handler(int signo);
-int         persist(char *text , int len , char type , struct timeval ts);
-int         sem_init();
-void        sem_destroy(int);
-int         sem_lock(int);
-int         sem_unlock(int);
-rule_st    *deamon_get_rule(FILE *fp);
-int         deamon_get_template(FILE *fp_tpl , tpl_st *mytpl);
-void        deamon_clean_rule(rule_st *ruleHead);
-char       *deamon_get_stat(int, conn_config_st * , pack_config_st *);
-char       *deamon_adjust_status(int , char * , pack_config_st *);
-char       *deamon_adjust_para( char *msg , conn_config_st *p_conn_config);
+int         command_conn_stop(conn_config_st *);
+int         command_conn_start(conn_config_st *);
+int         command_pack_load(char *msg , pack_config_st *p_pack_conf);
+int         command_pack_send(pack_config_st *p_pack_conf);
+int         command_pack_shut(pack_config_st *p_pack_conf);
+char       *command_get_stat(int, conn_config_st * , pack_config_st *);
+char       *command_adjust_status(int , char * , pack_config_st *);
+char       *command_adjust_para( char *msg , conn_config_st *p_conn_config);
+void 		command_update_conn_status( char *buffer_cmd , conn_config_st *p_conn_conf );
 void        deamon_status_op(int flag , int id , int adjustment , int percent , int direc , int *before , int *after);
 int         deamon_check();
 void        deamon_start();
