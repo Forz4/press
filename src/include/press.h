@@ -98,13 +98,6 @@ typedef struct mystat{
     int     timetotal;      /* time in total */
 }stat_st;
 
-typedef struct monstat{
-    int     send_num;       /* number of packages sent by conn*/
-    int     recv_num;       /* number of packages received by conn*/
-    int     real_send_tps;  /* real send tps */
-    int     real_recv_tps;  /* real recv tps */
-}monstat_st;
-
 int			getTranInfo( char *message  , char *key  , char *trannum , char *retcode );
 int         sem_init();
 void        sem_destroy(int);

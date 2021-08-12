@@ -14,15 +14,9 @@ int         sock_recv = 0;              /* socket for receiving                 
 int         pidSend = 0;                /* PID of sending process in JCB mode        */
 int         pidRecv = 0;                /* PID of receiving process in JCB mode      */
 int         g_shmid = 0;                /* share memory id for global status area    */
-int         g_mon_shmid = 0;            /* share memory id for monitor status area   */
 stat_st    *g_stat;                     /* global statsu area pointer                */
-monstat_st *g_mon_stat;                 /* global monitor area pointer               */
-int         g_mon_semid = 0;            /* semophore for g_mon_shmid                 */
 conn_config_st *p_conn_conf = NULL;     /* connection configs pointer                */
 pack_config_st *p_pack_conf = NULL;     /* packing configs pointer                   */
-int         lastTimeSendNum;            /* sent number at last checkpoint            */
-int         lastTimeRecvNum;            /* received number at last checkpoint        */
-struct timeval lastTimeStamp;           /* timestamp of last checkpoint              */
 int         server_sockfd;		        /* command listening socket                  */
 int         pack_pit_quit;
 
@@ -48,8 +42,10 @@ int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
 
     } else {
         /* CUPS8583 transaction */
-        CUPS_MESSAGE_t *m = CUPS8583_parseMessage( (BYTE *)(message+4) , NULL);
+        char errmsg[30];
+        CUPS_MESSAGE_t *m = CUPS8583_parseMessage( (BYTE *)(message+4) , errmsg);
         if ( m == NULL ){
+            log_write(CONLOG, LOGERR, "%s", errmsg);
             return -1;
         }
         /* get key */
@@ -70,40 +66,11 @@ int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
         /* get trannum */
         if ( trannum )  memcpy( trannum , m->header.pbytMsgtype , 4 );
         /* get retcode */
-        if ( retcode )  memcpy( retcode , m->fields[38].pchData , m->fields[38].intDataLength);
-
+        if ( retcode && m->bitmap.pbytFlags[38] == '1')  
+            memcpy( retcode , m->fields[38].pchData , m->fields[38].intDataLength);
         CUPS8583_freeMessage(m);
     }
     return 0;
-}
-int sem_init()
-{
-    int semid = 0;
-    int ret = 0;
-    union semun1 arg;
-
-    semid = semget(IPC_PRIVATE , 1 , IPC_CREAT|0660);
-    if ( semid < 0 ){
-        log_write(SYSLOG , LOGERR , "semget fail , semid[%d] , errno[%d]" , semid , errno);
-        return -1;
-    }
-    arg.val = 1;
-    ret = semctl( semid , 0 , SETVAL , arg);
-    if ( ret < 0 ){
-        log_write(SYSLOG , LOGERR , "semctl fail , ret[%d] , errno[%d]" , ret , errno);
-        return -1;
-    }
-    return semid;
-}
-int sem_lock(int semid)
-{
-    struct sembuf sops={0,-1, SEM_UNDO};
-    return (semop(semid,&sops,1));
-}
-int sem_unlock(int semid)
-{
-    struct sembuf sops={0,+1, SEM_UNDO};
-    return (semop(semid,&sops,1));
 }
 int persist(char *text , int len , char type , struct timeval ts)
 {
@@ -407,12 +374,6 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     conn_report_status( CONN_ESTABLISHED );
     log_write(CONLOG , LOGINF , "accept on port[%d] OK" , p_receiver->port);
 
-    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
-    if ( g_mon_stat == NULL ){
-        log_write(CONLOG , LOGERR , "shmat for monstat_st fail , shmid[%d]" , g_mon_shmid);
-        return -1;
-    }
-
     /*
      connect to redis server
      */
@@ -446,12 +407,8 @@ int conn_receiver_start(comm_proc_st *p_receiver)
             }
         }
 
-        sem_lock(g_mon_semid);
-        g_mon_stat->recv_num ++;
-        sem_unlock(g_mon_semid);
-
-        // for debug
-        usleep(50000);
+        /* debug */
+        usleep(100);
 
         gettimeofday( &ts , NULL );
         /*
@@ -469,7 +426,8 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         if ( getTranInfo(buffer, redisMatchupKey, trannum, retcode) == 0 ){
             reply = redisCommand(c, "hget %s tv_sec" , redisMatchupKey);
             if ( reply->type == REDIS_REPLY_NIL ){
-                log_write(CONLOG, LOGINF, "[%s] matchup fail", redisMatchupKey);
+                freeReplyObject(reply);
+                log_write(CONLOG, LOGERR, "[%s] matchup fail", redisMatchupKey);
             } else {
                 int second = atoi(reply->str);
                 freeReplyObject(reply);
@@ -479,19 +437,19 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                 int duration = (ts.tv_sec - second)*1000000 + ts.tv_usec - usec;
 
                 reply = redisCommand( c , "del %s", redisMatchupKey);
-                freeReplyObject(reply);      
-                log_write(CONLOG, LOGINF, "[%s] matchup ok , time use [%d.%d]ms", redisMatchupKey , duration/1000 , duration%1000);
-
+                freeReplyObject(reply);
                 reply = redisCommand( c , "incr trac|%s|total", trannum);
                 freeReplyObject(reply);
                 reply = redisCommand( c , "incrby trac|%s|duration %d", trannum , duration);
                 freeReplyObject(reply);
 
-                if ( atoi(retcode) == 0 ){
+                if ( strlen(retcode) && atoi(retcode) == 0 ){
                     reply = redisCommand( c , "incr trac|%s|suc", trannum);
                     freeReplyObject(reply);
                 }
             }
+        } else {
+            log_write(CONLOG, LOGERR , "unpack error");
         }
 
         if ( p_receiver->persist == 1 ){
@@ -549,12 +507,6 @@ int conn_sender_start(comm_proc_st *p_sender)
     redisReply* reply = NULL;
     char   redisMatchupKey[100];
 
-    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
-    if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail ,shmid[%d]" , g_mon_shmid);
-        return -1;
-    }
-
     /*
      connect to redis server
      */
@@ -580,8 +532,8 @@ int conn_sender_start(comm_proc_st *p_sender)
                 }
                 break;
             }
+            conn_report_status( CONN_ESTABLISHED );
         }
-        conn_report_status( CONN_ESTABLISHED );
         log_write(CONLOG , LOGDBG , "connect OK");
 
         if (HEART_INTERVAL > 0){
@@ -625,10 +577,6 @@ int conn_sender_start(comm_proc_st *p_sender)
             nLeft -= nSent;
         }
         log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
-        
-        sem_lock(g_mon_semid);
-        g_mon_stat->send_num ++;
-        sem_unlock(g_mon_semid);
 
         gettimeofday(&ts , NULL);
         /* 
@@ -696,10 +644,6 @@ int conn_sender_start(comm_proc_st *p_sender)
                     nLeft -= nRead;
                 }
             }
-
-            sem_lock(g_mon_semid);
-            g_mon_stat->recv_num ++;
-            sem_unlock(g_mon_semid);
 
             if ( p_sender->persist == 1 ){
                 nTranlen = get_length(buffer);
@@ -784,12 +728,6 @@ int conn_jips_start(comm_proc_st *p_jips)
     /* start receiving process */
     pidRecv = fork();
     if ( pidRecv == 0 ){
-        g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
-        if ( g_mon_stat == NULL ){
-            log_write(CONLOG , LOGERR , "shmat for monstat_st fail , shmid[%d]" , g_mon_shmid);
-            return -1;
-        }
-
         while(1){
             memset(buffer , 0x00 , sizeof(buffer));
             memset(&msgs , 0x00 , sizeof(msg_st));
@@ -819,10 +757,6 @@ int conn_jips_start(comm_proc_st *p_jips)
 
             log_write(CONLOG , LOGDBG , "recv OK ,textlen[%d]" , p_jips->port , textlen);
             
-            sem_lock(g_mon_semid);
-            g_mon_stat->recv_num ++;
-            sem_unlock(g_mon_semid);
-
             if ( p_jips->persist == 1 ){
                 msgs.type = 1;
                 memcpy(msgs.text , buffer , textlen + 4);
@@ -879,10 +813,6 @@ int conn_jips_start(comm_proc_st *p_jips)
                 nLeft -= nSent;
             }
             log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
-
-            sem_lock(g_mon_semid);
-            g_mon_stat->send_num ++;
-            sem_unlock(g_mon_semid);
 
             if ( p_jips->persist == 1 ){
                 gettimeofday(&ts , NULL);
@@ -976,7 +906,6 @@ void conn_report_status( int status )
     char message[30];
     memset( message , 0x00 , sizeof(message));
     sprintf( message , "report %d %d" , getpid() , status);
-    log_write(CONLOG, LOGINF, "reporting %s", message);
     send( sock , message , strlen(message) , 0);
     close(sock);
     return;
@@ -1152,11 +1081,6 @@ int pack_load(char *msg , pack_config_st *p_pack_conf)
     }
     p_pack_conf->status = LOADED;
 
-    memset(g_mon_stat , 0x0 , sizeof(monstat_st));
-    lastTimeSendNum = 0;
-    lastTimeRecvNum = 0;
-    memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
-
     return 0;
 }
 
@@ -1190,10 +1114,6 @@ int pack_shut(pack_config_st *p_pack_conf)
     }
 
     p_pack_conf->status = FINISHED;
-    memset(g_mon_stat , 0x0 , sizeof(monstat_st));
-    lastTimeSendNum = 0;
-    lastTimeRecvNum = 0;
-    memset(&lastTimeStamp , 0x0 , sizeof(struct timeval));
 
     return 0;
 }
@@ -1547,16 +1467,20 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
                     }
                     sprintf(status , "%-3d/%-3d" , count , p_comm->parallel);
                 } else {
-                    switch ( p_comm->status ){
-                        case CONN_ESTABLISHED:
-                            strcpy( status , "ESTABLISHED");
-                            break;
-                        case CONN_BINDFAIL:
-                            strcpy( status , "BIND FAIL");
-                            break;
-                        default:
-                            strcpy( status , "NOT READY");
-                            break;
+                    if ( kill( p_comm->pid , 0) != 0 ){
+                        strcpy( status , "DOWN");
+                    } else {
+                        switch ( p_comm->status ){
+                            case CONN_ESTABLISHED:
+                                strcpy( status , "ESTABLISHED");
+                                break;
+                            case CONN_BINDFAIL:
+                                strcpy( status , "BIND FAIL");
+                                break;
+                            default:
+                                strcpy( status , "NOT READY");
+                                break;
+                        }
                     }
                 }
 
@@ -1627,56 +1551,65 @@ char *deamon_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p
     }
     if ( flag & STAT_MONI ){
         if ( p_pack_conf->status == RUNNING ) {
-            /* connect to redis*/
-            redisContext *c = redisConnect("127.0.0.1", 6379);
-            if(c->err)   
-                log_write(SYSLOG, LOGERR, "redis server not found : %s\n", c->errstr);
-
+            /* connect to redis*/        
             offset += sprintf(ret+offset , \
                     "REAL TIME MONITOR\n");
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
-            offset += sprintf(ret+offset , \
-                    "[TIME    ][TPS SENT][TPS RECV]\n");
-            gettimeofday(&nowTimeStamp,NULL);
-            for( int i = 0 ; i < 10 ; i ++ ){
-                time_t t = nowTimeStamp.tv_sec - i;
-                struct tm *temp = localtime(&t);
+            redisContext *c = redisConnect("127.0.0.1", 6379);
+            if(c->err){
+                offset += sprintf(ret+offset , "redis error : %s\n" , c->errstr);
+            } else {
+                redisReply *reply = NULL;
+                redisReply *reply1 = NULL;
                 int sendtps = 0;
                 int recvtps = 0;
-                redisReply *reply = NULL;
-                reply = redisCommand( c , "get sendtps|%d", nowTimeStamp.tv_sec-i);
-                if ( reply->type != REDIS_REPLY_NIL && reply->str )   sendtps = atoi(reply->str);
+                time_t t = 0;
+                struct tm *temp = NULL;
+                char trannum[4+1];
+                int  recvnum = 0;
+                int  sucnum = 0;
+                int  duration = 0;
+                /* tps */
+                offset += sprintf(ret+offset , \
+                        "[TIME    ][TPS SENT][TPS RECV]\n");
+                gettimeofday(&nowTimeStamp,NULL);
+                for( int i = 1 ; i <= 5 ; i ++ ){
+                    t = nowTimeStamp.tv_sec - i;
+                    temp = localtime(&t);
+                    reply = redisCommand( c , "get sendtps|%d", nowTimeStamp.tv_sec-i);
+                    if ( reply->type != REDIS_REPLY_NIL && reply->str )   sendtps = atoi(reply->str);
+                    freeReplyObject(reply);
+                    reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec-i);
+                    if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
+                    freeReplyObject(reply);
+                    offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
+                        temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
+                }
+                /* successful ratio */
+                reply = redisCommand( c , "keys trac*total");
+                if ( reply->type != REDIS_REPLY_NIL ){
+                    offset += sprintf(ret+offset , \
+                        "[TRAN][MATCHNUM][RATIO  ][TIME     ]\n");
+                    for ( int i = 0 ; i < reply->elements ; i ++ ){
+                        memcpy( trannum , reply->element[i]->str+5 , 4 );
+                        trannum[4] = '\0';
+                        reply1 = redisCommand(c, "get trac|%s|total", trannum);
+                        if ( reply1->type != REDIS_REPLY_NIL )  recvnum = atoi(reply1->str);
+                        freeReplyObject(reply1);
+                        reply1 = redisCommand(c, "get trac|%s|suc", trannum);
+                        if ( reply1->type != REDIS_REPLY_NIL )  sucnum = atoi(reply1->str);
+                        freeReplyObject(reply1);
+                        reply1 = redisCommand(c, "get trac|%s|duration", trannum);
+                        if ( reply1->type != REDIS_REPLY_NIL )  duration = atoi(reply1->str);
+                        freeReplyObject(reply1);
+                        offset += sprintf(ret+offset , "[%4s][%-8d][%-3.2f%%][%-7.2fms]\n" ,\
+                            trannum , recvnum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
+                    }
+                }
                 freeReplyObject(reply);
-                reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec-i);
-                if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
-                freeReplyObject(reply);
-                offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
-                    temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
             }
             redisFree(c);
-            /*
-            timersub(&nowTimeStamp , &lastTimeStamp , &timeInterval);
-            memcpy(&lastTimeStamp , &nowTimeStamp , sizeof(struct timeval));
-            if ( lastTimeSendNum > 0 ){
-                g_mon_stat->real_send_tps = (g_mon_stat->send_num - lastTimeSendNum) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
-            }
-            lastTimeSendNum = g_mon_stat->send_num;
-            if ( lastTimeRecvNum > 0 ){
-                g_mon_stat->real_recv_tps = (g_mon_stat->recv_num - lastTimeRecvNum ) / (timeInterval.tv_sec+(float)timeInterval.tv_usec/1000000);
-            }
-            lastTimeRecvNum = g_mon_stat->recv_num;
-            offset += sprintf(ret+offset , \
-                    "[%-12d][%-12d][%-8d][%-8d]\n", \
-                    g_mon_stat->send_num,\
-                    g_mon_stat->recv_num,\
-                    g_mon_stat->real_send_tps,\
-                    g_mon_stat->real_recv_tps);
-
-            offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
-            */
-
         } else {
             offset += sprintf(ret+offset , "NO REAL TIME MONITOR");
         }
@@ -1934,21 +1867,6 @@ void deamon_exit()
         log_write(SYSLOG , LOGINF ,"delete shmid=%d OK",g_shmid);
     }
 
-    shmdt((void *)g_mon_stat);
-    if ( shmctl(g_mon_shmid , IPC_RMID , 0) ){
-        log_write(SYSLOG , LOGERR ,"delete shmid=%d fail",g_mon_shmid);
-    } else {
-        log_write(SYSLOG , LOGINF ,"delete shmid=%d OK",g_mon_shmid);
-    }
-
-    union semun1 arg;
-    arg.val = (short)0;
-    if ( semctl(g_mon_semid,0,IPC_RMID,arg) ){
-        log_write(SYSLOG , LOGERR ,"delete semid=%d fail",g_mon_semid);
-    } else {
-        log_write(SYSLOG , LOGINF ,"delete semid=%d OK",g_mon_semid);
-    }
-
     //log_clear();
 
     pack_config_free(p_pack_conf);
@@ -2036,12 +1954,6 @@ int main(int argc , char *argv[])
     signal(SIGTERM , deamon_signal_handler);
 
     char *retmsg = NULL;
-    g_mon_semid = sem_init();
-    if ( g_mon_semid < 0 ){
-        log_write(SYSLOG , LOGERR , "init semophore fail");
-        deamon_exit();
-    }
-    log_write(SYSLOG , LOGINF , "init semophore OK , g_mon_semid=%d",g_mon_semid);
 
     if ( (QID_MSG = msgget(IPC_PRIVATE , IPC_CREAT|0660)) < 0){
         log_write(SYSLOG , LOGERR , "init message queue fail");
@@ -2074,18 +1986,6 @@ int main(int argc , char *argv[])
         deamon_exit();
     }
     log_write(SYSLOG , LOGINF , "shmat for stat_st OK , g_shmid = %d" , g_shmid );
-
-    g_mon_shmid = shmget( IPC_PRIVATE , sizeof(monstat_st) , IPC_CREAT|0660);
-    if ( g_mon_shmid < 0 ){
-        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail");
-        deamon_exit();
-    }
-    g_mon_stat = (monstat_st *)shmat(g_mon_shmid , NULL , 0);
-    if ( g_mon_stat == NULL ){
-        log_write(SYSLOG , LOGERR , "shmat for monstat_st fail , shmid = %d",g_mon_shmid);
-        deamon_exit();
-    }
-    log_write(SYSLOG , LOGINF , "shmat for mon_stat_st OK , g_mon_shmid = %d" , g_mon_shmid);
 
     char buffer_cmd[MAX_CMD_LEN];
 

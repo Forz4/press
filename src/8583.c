@@ -1,4 +1,5 @@
 #include "include/8583.h"
+#include "include/log.h"
 /*
  CONSTANTS
  */
@@ -169,6 +170,7 @@ CUPS_MESSAGE_t *CUPS8583_parseMessage( BYTE *pchBuf , char *pchErrmsg )
     return pmessage;
 
 parse_fail:
+
     CUPS8583_freeMessage( pmessage );
     return NULL;
 }
@@ -289,7 +291,8 @@ int CUPS8583_parseFields( BYTE *pchBuf , CUPS_BITMAP_t *bitmap , CUPS_FIELD_t  *
             } else {
                 pfields[i].intDataLength  = ISO8583_FIELDS_DEF[i].intMaxLengthInBytes;
             }
-            pfields[i].pchData = (BYTE *)malloc(pfields->intDataLength);
+            pfields[i].pchData = (BYTE *)malloc(pfields[i].intDataLength);
+            if( pfields[i].pchData == NULL )    return -1;
             memcpy( pfields[i].pchData , pchBuf , pfields[i].intDataLength);
             pchBuf += pfields[i].intDataLength;
         }
