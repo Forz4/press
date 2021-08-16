@@ -568,14 +568,14 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                     reply = redisCommand( c , "del %s", redisMatchupKey);
                     freeReplyObject(reply);
 
-                    reply = redisCommand( c , "incr trac|%s|total", trannum);
+                    reply = redisCommand( c , "incr trac|%s|total|%d", trannum , ts.tv_sec );
                     freeReplyObject(reply);
 
-                    reply = redisCommand( c , "incrby trac|%s|duration %d", trannum , duration);
+                    reply = redisCommand( c , "incrby trac|%s|duration|%d %d", trannum , ts.tv_sec , duration);
                     freeReplyObject(reply);
     
                     if ( strlen(retcode) && atoi(retcode) == 0 ){
-                        reply = redisCommand( c , "incr trac|%s|suc", trannum);
+                        reply = redisCommand( c , "incr trac|%s|suc|%d", trannum , ts.tv_sec);
                         freeReplyObject(reply);
                     }
                 }
@@ -1611,55 +1611,48 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                 int  sucnum = 0;
                 int  duration = 0;
                 /* tps */
-                offset += sprintf(ret+offset , \
-                        "[TIME    ][TPS SENT][TPS RECV]\n");
+                offset += sprintf(ret+offset , "[TIME    ][TPS SENT][TPS RECV]\n");
                 gettimeofday(&nowTimeStamp,NULL);
-                for( int i = 1 ; i <= 5 ; i ++ ){
-                    t = nowTimeStamp.tv_sec - i;
-                    temp = localtime(&t);
-                    reply = redisCommand( c , "get sendtps|%d", nowTimeStamp.tv_sec-i);
-                    if ( reply->type != REDIS_REPLY_NIL && reply->str )   sendtps = atoi(reply->str);
-                    freeReplyObject(reply);
-                    reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec-i);
-                    if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
-                    freeReplyObject(reply);
-                    offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
-                        temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
-                }
+                t = nowTimeStamp.tv_sec;
+                temp = localtime(&t);
+                reply = redisCommand( c , "get sendtps|%d", nowTimeStamp.tv_sec);
+                if ( reply->type != REDIS_REPLY_NIL && reply->str )   sendtps = atoi(reply->str);
+                freeReplyObject(reply);
+                reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec);
+                if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
+                freeReplyObject(reply);
+                offset += sprintf(ret+offset , "[%02d:%02d:%02d][%-8d][%-8d]\n",\
+                    temp->tm_hour , temp->tm_min , temp->tm_sec , sendtps, recvtps);
 
-                offset += sprintf(ret+offset , \
-                    "\nMONITOR-REPONSE\n");
-                offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
-                /* successful ratio */
-                reply = redisCommand( c , "keys trac*total");
+                reply = redisCommand( c , "keys trac*total|%d" , nowTimeStamp.tv_sec);
                 if ( reply->type != REDIS_REPLY_NIL ){
-                    offset += sprintf(ret+offset , \
-                        "[TRAN][MATCHNUM][RATIO  ][TIME     ]\n");
+
+                    offset += sprintf(ret+offset , "\nMONITOR-REPONSE\n");
+                    offset += sprintf(ret+offset , "===========================================================================\n");
+                    offset += sprintf(ret+offset , "[TRAN][MATCHNUM][RATIO  ][TIME     ]\n");
                     for ( int i = 0 ; i < reply->elements ; i ++ ){
                         memcpy( trannum , reply->element[i]->str+5 , 4 );
                         trannum[4] = '\0';
-                        reply1 = redisCommand(c, "get trac|%s|total", trannum);
+                        reply1 = redisCommand(c, "get trac|%s|total|%d", trannum , nowTimeStamp.tv_sec);
                         if ( reply1->type != REDIS_REPLY_NIL )  recvnum = atoi(reply1->str);
                         freeReplyObject(reply1);
-                        reply1 = redisCommand(c, "get trac|%s|suc", trannum);
+                        reply1 = redisCommand(c, "get trac|%s|suc|%d", trannum , nowTimeStamp.tv_sec);
                         if ( reply1->type != REDIS_REPLY_NIL )  sucnum = atoi(reply1->str);
                         freeReplyObject(reply1);
-                        reply1 = redisCommand(c, "get trac|%s|duration", trannum);
+                        reply1 = redisCommand(c, "get trac|%s|duration|%d", trannum , nowTimeStamp.tv_sec);
                         if ( reply1->type != REDIS_REPLY_NIL )  duration = atoi(reply1->str);
                         freeReplyObject(reply1);
                         offset += sprintf(ret+offset , "[%4s][%-8d][%-3.2f%%][%-7.2fms]\n" ,\
                             trannum , recvnum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
                     }
+                    freeReplyObject(reply);
                 }
-                freeReplyObject(reply);
             }
             redisFree(c);
         } else {
             offset += sprintf(ret+offset , "NO REAL TIME MONITOR");
         }
     }
-
     return ret;
 }
 
