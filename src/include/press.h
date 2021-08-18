@@ -18,6 +18,14 @@
 
 #define CONN_NOTREADY       0
 #define CONN_ESTABLISHED	1
+#define CONN_REDISERROR     2
+#define CONN_CONNECTING		3
+#define CONN_BINDFAIL       4
+#define CONN_LISTENFAIL     5
+#define CONN_ACCEPTFAIL     6
+#define CONN_RECVERROR      7
+#define CONN_MSGRCVERROR    8
+#define CONN_SENDERROR      9
 
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2
