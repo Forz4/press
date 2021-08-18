@@ -4,6 +4,7 @@ int outflag = 0;
 
 static void print_usage()
 {
+    printf("<deam>    start deamon process\n"  );
 	printf("<kill>    stop deamon process\n"  );
 	printf("<init>    start connection module\n"  );
 	printf("<stop>    stop connection module\n"  );
@@ -87,7 +88,6 @@ int main(int argc , char *argv[])
 	/*variables*/
     char inputLine[200];
     char buffer[MAX_REPLY_LEN];
-    //int  press_pid = 0;
     int  monitor_mode = 0;
 
     int  op = 0;
@@ -127,19 +127,9 @@ int main(int argc , char *argv[])
         servaddr[i].sin_addr.s_addr = inet_addr(ip[i]);
     }
 
+    signal( SIGCHLD , SIG_IGN );
+
     while( 1 ) {
-        /*
-        press_pid = check_deamon();
-        if ( press_pid < 0 ){
-            printf("守护进程检查失败\n");
-            exit(0);
-        }
-        if ( press_pid > 0 ) {
-            printf("(DEAMON PID:%d)$ " , press_pid);
-        } else {
-            printf("(输入deam启动守护或help查看命令)$ ");
-        }
-        */
         if ( nodeIndex == 0 ){
             printf("presscmd(ALL NODES)> ");
         } else {
@@ -147,40 +137,29 @@ int main(int argc , char *argv[])
         }
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
-        if ( inputLine[0] == '\n' )  continue;
+        if ( inputLine[0] == '\n' ){
+            print_usage();
+            continue;
+        }
         if ( memcmp(inputLine , "help" , 4) == 0 ){
             print_usage();
             continue;
         } else if ( memcmp(inputLine , "exit" , 4) == 0 ){
             break;
-            /*
         } else if ( memcmp(inputLine , "deam" , 4) == 0 ){
             int pid = fork();
             if ( pid == 0 ){
-                system("press");
+                execlp("press" , "press" , (char *)0 );
                 exit(0);
             } else if ( pid > 0 ){
-                int timeout = 3;
-                while(-- timeout){
-                    press_pid = check_deamon();
-                    if ( press_pid > 0 ){
-                        printf("守护进程启动成功\n");
-                        break;
-                    }
-                    sleep(1);
-                }
-                if ( timeout == 0 ){
-                    printf("守护进程启动等待超时失败,请查看日志\n");
-                    exit(1);
-                } else {
-                    continue;
-                }
+                printf("deamon start\n");
             } else {
                 printf("fork fail");
                 exit(1);
             }
-            */
+            continue;
         } else if ( 
+                    memcmp(inputLine , "deam" , 4) && \
                     memcmp(inputLine , "init" , 4) && \
                     memcmp(inputLine , "stop" , 4) && \
                     memcmp(inputLine , "kill" , 4) && \
@@ -197,17 +176,6 @@ int main(int argc , char *argv[])
             print_usage();
             continue;
         } 
-
-    /*
-        if ( memcmp(inputLine , "list" , 4) == 0 ){
-            for ( i = 0 ; i < numOfNode ; i ++ ){
-                printf("节点%d:\n" , i+1);
-                printf("IP[%s]\n" , ip[i]);
-                printf("PORT[%d]\n" , port[i]);
-            }
-            continue;
-        } 
-    */
         if ( memcmp(inputLine , "conn" , 4) == 0 ){
             nodeIndex = atoi(inputLine+5) ;
             if ( nodeIndex <= 0 || nodeIndex > numOfNode ){
@@ -218,12 +186,6 @@ int main(int argc , char *argv[])
             }
             continue;
         }
-
-    /*
-        else if ( press_pid == 0 ){
-            continue;
-        }
-    */
 
         if( inputLine[strlen(inputLine)-1] == '\n' )
             inputLine[strlen(inputLine)-1] = '\0';
@@ -273,24 +235,6 @@ TAGMONITOR:
                     outflag = 0;
                 }
             }
-
-            /*
-            if ( memcmp(inputLine , "kill" , 4) == 0 ){
-                int timeout = 5;
-                while(-- timeout){
-                    press_pid = check_deamon();
-                    if ( press_pid == 0 ){
-                        printf("守护进程停止成功\n");
-                        break;
-                    }
-                    sleep(1);
-                }
-                if ( timeout == 0 ){
-                    printf("守护进程停止等待超时,请查看日志\n");
-                } 
-                continue;
-            }
-            */
         }
     }
 	return 0;

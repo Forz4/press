@@ -26,6 +26,7 @@
 #define CONN_RECVERROR      7
 #define CONN_MSGRCVERROR    8
 #define CONN_SENDERROR      9
+#define CONN_ACCEPTING      10
 
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2

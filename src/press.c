@@ -20,17 +20,18 @@ pack_config_st *p_pack_conf = NULL;     /* packing configs pointer              
 int         server_sockfd;		        /* command listening socket                  */
 int         pack_pit_quit;
 
-char CONN_STATUS_STR[10][13]  = {
-    "UNKNOWN",
+char CONN_STATUS_STR[11][13]  = {
+    "UNKNOWN    ",
     "ESTABLISHED",
     "REDIS ERROR",
-    "CONNECTING",
-    "BIND FAIL",
+    "CONNECTING ",
+    "BIND FAIL  ",
     "LISTEN FAIL",
     "ACCEPT FAIL",
-    "RECVERROR",
-    "MSGRCV ERROR",
-    "SEND ERROR"
+    "RECV ERROR ",
+    "MSGRCVERROR",
+    "SEND ERROR ",
+    "ACCEPTING  "
 };
 
 /*
@@ -529,6 +530,7 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     }
     log_write(CONLOG , LOGINF , "listen port[%d] OK" , p_receiver->port);
 
+    conn_report_status( CONN_ACCEPTING );
     sock_recv = accept(server_sockfd , (struct sockaddr *)&client_addr , &socket_len);
     if (sock_recv < 0){
         log_write(CONLOG , LOGERR , "accept on port[%d] fail" , p_receiver->port);
@@ -2140,15 +2142,19 @@ int main(int argc , char *argv[])
             command_pack_shut(p_pack_conf);
             send( sock_recv , "exec [shut] OK , packing module is stopped" , MAX_CMD_LEN , 0);
         } else if ( strncmp(buffer_cmd , "kill" , 4) == 0 ){
-            if (command_pack_shut(p_pack_conf) ) {
-                log_write(SYSLOG , LOGERR ,"packing module stop fail");
+            if ( (p_pack_conf->status != FINISHED && p_pack_conf->status != NOTLOADED) || p_conn_conf->status != NOTLOADED ){
+                send( sock_recv , "exec [kill] fail , enter [stop/shut] first" , MAX_CMD_LEN , 0);
+            } else {
+                if (command_pack_shut(p_pack_conf) ) {
+                    log_write(SYSLOG , LOGERR ,"packing module stop fail");
+                }
+                if ( command_conn_stop(p_conn_conf) ){
+                    log_write(SYSLOG , LOGERR ,"connection module stop fail");
+                }
+                send( sock_recv , "exec [kill] OK , deamon process quitting" , MAX_CMD_LEN , 0);
+                close(sock_recv);
+                deamon_exit();
             }
-            if ( command_conn_stop(p_conn_conf) ){
-                log_write(SYSLOG , LOGERR ,"connection module stop fail");
-            }
-            send( sock_recv , "exec [kill] OK , deamon process quitting" , MAX_CMD_LEN , 0);
-            close(sock_recv);
-            deamon_exit();
         } else if ( strncmp(buffer_cmd , "stat" , 4) == 0){
             retmsg = command_get_stat( STAT_CONN|STAT_PACK|STAT_MONI , p_conn_conf , p_pack_conf);
             send( sock_recv , retmsg , MAX_CMD_LEN , 0);
