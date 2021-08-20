@@ -64,6 +64,7 @@ typedef struct pit_proc{
     int     index;
 	pid_t 	pid;
     char    tplFileName[MAX_FILENAME_LEN];
+    char    trannum[4+1];
 	FILE 	*tpl_fp;
 	FILE 	*rule_fp;
 	struct  REPLACE	*rep_head;

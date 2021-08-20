@@ -1130,6 +1130,8 @@ int pack_config_load( char *filename , pack_config_st *p_pack_conf)
         log_write(SYSLOG , LOGDBG , "read tplfilename[%s]" ,buf );
 
         strcpy(pit_cur->tplFileName , buf);
+        memcpy(pit_cur->trannum , buf , 4);
+        pit_cur->trannum[4] = '\0';
 
         memset(pathname , 0x00 , sizeof(pathname));
         sprintf(pathname , "%s/data/tpl/%s" , getenv("PRESS_HOME") , buf);
@@ -1643,7 +1645,6 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                 int  sucnum = 0;
                 int  duration = 0;
                 int  i = 0;
-                int  j = 0;
                 gettimeofday(&nowTimeStamp,NULL);
 
                 for( i = 1 ; i <= 5 ; i ++){
@@ -1669,32 +1670,30 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                     "===========================================================================\n");
                 offset += sprintf(ret+offset , "[TRAN][RATIO  ][RESPONSE ]\n");
 
-                reply = redisCommand( c , "keys trac*total|%d" , nowTimeStamp.tv_sec-1);
-                if ( reply->type != REDIS_REPLY_NIL ){ 
-                    for ( j = 0 ; j < reply->elements ; j ++ ){
-                        memcpy( trannum , reply->element[j]->str+5 , 4 );
-                        trannum[4] = '\0';
-                        recvnum = 0;
-                        sucnum = 0;
-                        duration = 0;
-                        for( i = 1 ; i <=5 ; i ++ ){
-                            reply1 = redisCommand(c, "get trac|%s|total|%d", trannum , nowTimeStamp.tv_sec-i);
-                            if ( reply1->type != REDIS_REPLY_NIL )  recvnum += atoi(reply1->str);
-                            freeReplyObject(reply1);
-                            reply1 = redisCommand(c, "get trac|%s|suc|%d", trannum , nowTimeStamp.tv_sec-i);
-                            if ( reply1->type != REDIS_REPLY_NIL )  sucnum += atoi(reply1->str);
-                            freeReplyObject(reply1);
-                            reply1 = redisCommand(c, "get trac|%s|duration|%d", trannum , nowTimeStamp.tv_sec-i);
-                            if ( reply1->type != REDIS_REPLY_NIL )  duration += atoi(reply1->str);
-                            freeReplyObject(reply1);
-                        }
-                        if ( recvnum > 0 ){
-                            offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%-7.2fms]\n" ,\
-                                trannum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
-                        }                        
+
+                pit_proc_st *proc = p_pack_conf->pit_head;
+                while ( proc != NULL ){
+                    strcpy( trannum , proc->trannum);
+                    recvnum = 0;
+                    sucnum = 0;
+                    duration = 0;
+                    for( i = 1 ; i <=5 ; i ++ ){
+                        reply1 = redisCommand(c, "get trac|%s|total|%d", trannum , nowTimeStamp.tv_sec-i);
+                        if ( reply1->type != REDIS_REPLY_NIL )  recvnum += atoi(reply1->str);
+                        freeReplyObject(reply1);
+                        reply1 = redisCommand(c, "get trac|%s|suc|%d", trannum , nowTimeStamp.tv_sec-i);
+                        if ( reply1->type != REDIS_REPLY_NIL )  sucnum += atoi(reply1->str);
+                        freeReplyObject(reply1);
+                        reply1 = redisCommand(c, "get trac|%s|duration|%d", trannum , nowTimeStamp.tv_sec-i);
+                        if ( reply1->type != REDIS_REPLY_NIL )  duration += atoi(reply1->str);
+                        freeReplyObject(reply1);
                     }
+                    if ( recvnum > 0 ){
+                        offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%-7.2fms]\n" ,\
+                                trannum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
+                    }
+                    proc = proc->next;
                 }
-                freeReplyObject(reply);
             }
             redisFree(c);
         } else {
