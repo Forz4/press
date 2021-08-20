@@ -9,7 +9,7 @@ AR = @ar -ruc
 RM = @-rm -f
 ECHO = @echo
 
-all: press presscmd
+all: press presscmd press_report
 
 .c.o:
 	$(CC) -c $< -I$(INCPATH) $(CFLAGS)
@@ -19,6 +19,10 @@ presscmd: presscmd.o log.o pubfunc.o 8583.o
 	$(MV) $@ $(BINPATH)
 
 press: press.o log.o pubfunc.o 8583.o
+	$(CC) -o $@ $^ $(LIBS) -L$(LIBPATH)
+	$(MV) $@ $(BINPATH)
+
+press_report: press_report.o
 	$(CC) -o $@ $^ $(LIBS) -L$(LIBPATH)
 	$(MV) $@ $(BINPATH)
 

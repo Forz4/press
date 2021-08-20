@@ -569,10 +569,7 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                 nLeft -= nRead;
             }
         }
-
-        /* debug */
-        usleep(100);
-
+        
         if( p_receiver->monitor == 1 ){
             gettimeofday( &ts , NULL );
             /* update tps */

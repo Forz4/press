@@ -4,38 +4,31 @@ int outflag = 0;
 
 static void print_usage()
 {
-    printf("<deam>    start deamon process\n"  );
-	printf("<kill>    stop deamon process\n"  );
-	printf("<init>    start connection module\n"  );
-	printf("<stop>    stop connection module\n"  );
-	printf("<send>    start packing module\n");
-	printf("<shut>    stop packing module\n");
-	printf("<stat>    check status\n");
-	printf("<load>    load packing configs\n");
-	printf("          <load [filename]>\n");
-	printf("<moni>    start monitor mode\n");
-	printf("<tps>     set real TPS\n");
-	printf("          <tps [+-]adjustment[%%] [index]>\n");
-	printf("           tps +100\t\tadd 100 tps to all packing processes\n");
-	printf("           tps -10%%\t\tminus 10%% tps from all packing processes\n");
-	printf("           tps +100%% 0\t\tadd 100%% tps to packing process with index 0\n");
-	printf("           tps 10\t\tset all packing process to 10 tps\n");
-	printf("           tps 10 1\t\tset packing process with index 1 to 10 tps\n");
-	printf("<time>    set TIME\n");
-	printf("          <time [+-]adjustment[%%] [index]>\n");
-	printf("<para>    set parallel number of connection process(only for short connection)\n");
-	printf("          <para parallel_num>\n");
-	printf("<list>    list all nodes\n");
-	printf("<conn>    connection to a single node\n");
-	printf("          <conn index>\n");
-    printf("<snap>    create or show snapshots\n");
-    printf("          <snap create snapshot_name>\n"); 
-    printf("          <snap remove snapshot_name>\n"); 
-    printf("          <snap show>\n");   
-	printf("<exit>    exit presscmd\n");
-	printf("<help>    print help\n");
-	return;
+    printf("         ------------------------------------------------------------------------------------------------\n");
+    printf("         | MODULE     | COMMAND                             |  DESCRIPTION                              |\n"  );
+    printf("         |-----------------------------------------------------------------------------------------------\n");
+    printf("         | DEAMON     | deam                                |  start deamon process                     |\n" );
+    printf("         |            | kill                                |  stop deamon process                      |\n"  );
+    printf("         | CONNECTION | init                                |  start connection module                  |\n");
+    printf("         |            | stop                                |  stop connection module                   |\n"  );
+    printf("         |            | para parallel_num                   |  set parallel number of connection process|\n");
+    printf("         | PACKING    | send                                |  start sending messages                   |\n");
+    printf("         |            | shut                                |  stop sending                             |\n");
+    printf("         |            | load [config_file_name]             |  load packing configs                     |\n");
+    printf("         |            | tps  [+-]adjustment[%%] [index]      |  set real-time TPS                        |\n");
+    printf("         |            | time [+-]adjustment[%%] [index]      |  set total TIME                           |\n");
+    printf("         | MONITOR    | stat                                |  check status                             |\n");
+    printf("         |            | moni                                |  start monitor mode                       |\n");
+    printf("         | CLUSTER    | list                                |  list all nodes                           |\n");
+    printf("         |            | conn index_num                      |  connect to a single node                 |\n");
+    printf("         | STATISTICS | snap [create|remove snap_name show] |  create/remove/show snapshots             |\n");
+    printf("         | PRESSCMD   | exit                                |  exit presscmd                            |\n");
+    printf("         |            | help                                |  print help                               |\n");
+    printf("         ------------------------------------------------------------------------------------------------\n");
+
+    return;
 }
+
 static void print_help()
 {
     printf("PRESS VERSION: %s\n" , PRESS_VERSION);
@@ -209,17 +202,25 @@ int main(int argc , char *argv[])
                     freeReplyObject(reply);
                 } else if ( memcmp(inputLine+5 , "create" , 6 ) == 0 ){
                     gettimeofday(&ts,NULL);
-                    reply = redisCommand(c, "zadd snap %d %s" , ts.tv_sec , inputLine+12);
-                    freeReplyObject(reply);
-                    printf("create snapshot OK\n");
-                } else if ( memcmp( inputLine+5 , "remove" , 6) == 0 ){
-                    reply = redisCommand(c, "zrem snap %s" , inputLine+12);
-                    if ( reply->integer == 1 ){
-                        printf("remove snapshot OK\n");
+                    if ( strlen(inputLine+12) > 0 ){
+                        reply = redisCommand(c, "zadd snap %d %s" , ts.tv_sec , inputLine+12);
+                        freeReplyObject(reply);
+                        printf("create snapshot OK\n");
                     } else {
-                        printf("remove snapshot fail\n");
+                        printf("create snapshot fail , please enter a snapshot name\n");
                     }
-                    freeReplyObject(reply);
+                } else if ( memcmp( inputLine+5 , "remove" , 6) == 0 ){
+                    if ( strlen(inputLine+12) > 0 ){
+                        reply = redisCommand(c, "zrem snap %s" , inputLine+12);
+                        if ( reply->integer == 1 ){
+                            printf("remove snapshot OK\n");
+                        } else {
+                            printf("remove snapshot fail\n");
+                        }
+                        freeReplyObject(reply);
+                    } else {
+                        printf("remove snapshot fail , please enter a snapshot name\n");
+                    }
                 } else {
                     printf("invalid command , snap [create snapshot_name|show]\n");
                 }
