@@ -28,6 +28,10 @@ static void print_usage()
 	printf("<list>    list all nodes\n");
 	printf("<conn>    connection to a single node\n");
 	printf("          <conn index>\n");
+    printf("<snap>    create or show snapshots\n");
+    printf("          <snap create snapshot_name>\n"); 
+    printf("          <snap remove snapshot_name>\n"); 
+    printf("          <snap show>\n");   
 	printf("<exit>    exit presscmd\n");
 	printf("<help>    print help\n");
 	return;
@@ -141,6 +145,10 @@ int main(int argc , char *argv[])
             print_usage();
             continue;
         }
+
+        if( inputLine[strlen(inputLine)-1] == '\n' )
+            inputLine[strlen(inputLine)-1] = '\0';
+
         if ( memcmp(inputLine , "help" , 4) == 0 ){
             print_usage();
             continue;
@@ -158,8 +166,67 @@ int main(int argc , char *argv[])
                 exit(1);
             }
             continue;
+        } else if ( memcmp(inputLine , "conn" , 4) == 0 ){
+            nodeIndex = atoi(inputLine+5) ;
+            if ( nodeIndex <= 0 || nodeIndex > numOfNode ){
+                nodeIndex = 0;
+                printf("switch to ALL NODES mode\n" );
+            } else {
+                printf("switch to node[%s:%d]\n" , ip[nodeIndex-1] , port[nodeIndex-1]);
+            }
+            continue;
+        } else if ( memcmp(inputLine , "snap" , 4) == 0 ){
+            redisContext    *c = redisConnect("127.0.0.1", 6379);
+            redisReply      *reply = NULL;
+            redisReply      *reply1 = NULL;
+            time_t          t = 0;
+            struct tm       *temp = NULL;
+            struct timeval  ts;
+
+            if(c->err){
+                printf("redis error : %s\n" , c->errstr);
+            } else {
+                if ( memcmp(inputLine+5 , "show" , 4) == 0 ){
+                    reply = redisCommand(c, "zrange snap 0 -1");
+                    if ( reply->elements > 0 ){ 
+                        for ( int i = 0 ; i < reply->elements ; i ++ ){
+                            reply1 = redisCommand(c , "zscore snap %s", reply->element[i]->str);
+                            t = atoi(reply1->str);
+                            temp = localtime(&t);
+                            printf("[%s]:[%04d-%02d-%02d %02d:%02d:%02d]\n" ,\
+                                reply->element[i]->str,\
+                                temp->tm_year ,\
+                                temp->tm_mon ,\
+                                temp->tm_mday ,\
+                                temp->tm_hour ,\
+                                temp->tm_min ,\
+                                temp->tm_sec);
+                            freeReplyObject(reply1);
+                        }
+                    } else {
+                        printf("no snapshots found\n");
+                    }
+                    freeReplyObject(reply);
+                } else if ( memcmp(inputLine+5 , "create" , 6 ) == 0 ){
+                    gettimeofday(&ts,NULL);
+                    reply = redisCommand(c, "zadd snap %d %s" , ts.tv_sec , inputLine+12);
+                    freeReplyObject(reply);
+                    printf("create snapshot OK\n");
+                } else if ( memcmp( inputLine+5 , "remove" , 6) == 0 ){
+                    reply = redisCommand(c, "zrem snap %s" , inputLine+12);
+                    if ( reply->integer == 1 ){
+                        printf("remove snapshot OK\n");
+                    } else {
+                        printf("remove snapshot fail\n");
+                    }
+                    freeReplyObject(reply);
+                } else {
+                    printf("invalid command , snap [create snapshot_name|show]\n");
+                }
+            }
+            redisFree(c);
+            continue;
         } else if ( 
-                    memcmp(inputLine , "deam" , 4) && \
                     memcmp(inputLine , "init" , 4) && \
                     memcmp(inputLine , "stop" , 4) && \
                     memcmp(inputLine , "kill" , 4) && \
@@ -171,25 +238,12 @@ int main(int argc , char *argv[])
                     memcmp(inputLine , "time" , 4) && \
                     memcmp(inputLine , "para" , 4) && \
                     memcmp(inputLine , "list" , 4) && \
-                    memcmp(inputLine , "conn" , 4) && \
                     memcmp(inputLine , "shut" , 4) ) {
             print_usage();
             continue;
         } 
-        if ( memcmp(inputLine , "conn" , 4) == 0 ){
-            nodeIndex = atoi(inputLine+5) ;
-            if ( nodeIndex <= 0 || nodeIndex > numOfNode ){
-                nodeIndex = 0;
-                printf("switch to ALL NODES mode\n" );
-            } else {
-                printf("switch to node[%s:%d]\n" , ip[nodeIndex-1] , port[nodeIndex-1]);
-            }
-            continue;
-        }
 
-        if( inputLine[strlen(inputLine)-1] == '\n' )
-            inputLine[strlen(inputLine)-1] = '\0';
-
+        /* commands that should be sent to deamon or switch nodes */
         /* activate monitor mode */
         if ( memcmp( inputLine ,  "moni" , 4) == 0 ){
             strcpy(inputLine , "moni");

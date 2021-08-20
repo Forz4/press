@@ -1585,7 +1585,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
             offset += sprintf(ret+offset , \
                     "===========================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[INDEX][TPLFILE    ][STATUS     ][SET TPS  ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
+                    "[INDEX][TPLFILE    ][STATUS     ][SET TPS ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
             while ( p_pack != NULL ) {
                 l_stat = g_stat + p_pack->index;
                 memset( status , 0x00 , sizeof(status));
