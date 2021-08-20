@@ -569,7 +569,10 @@ int conn_receiver_start(comm_proc_st *p_receiver)
                 nLeft -= nRead;
             }
         }
-        
+
+        /* debug */
+        usleep(100);
+
         if( p_receiver->monitor == 1 ){
             gettimeofday( &ts , NULL );
             /* update tps */
@@ -1656,7 +1659,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                     reply = redisCommand( c , "get recvtps|%d", nowTimeStamp.tv_sec-i);
                     if ( reply->type != REDIS_REPLY_NIL && reply->str )   recvtps = atoi(reply->str);
                     freeReplyObject(reply);
-                    offset += sprintf(ret+offset , "[SENDTPS:%-8d][RECVTPS:%-8D]\n",sendtps,recvtps);
+                    offset += sprintf(ret+offset , "[SENDTPS:%-8d][RECVTPS:%-8d]\n",sendtps,recvtps);
                 }      
 
                 /* ratio/response time*/
@@ -1790,7 +1793,7 @@ char *command_adjust_status(int flag , char *msg , pack_config_st *p_pack_conf)
             if ( flag == 1 )
                 offset += sprintf(ret+offset , "alter packing process[%d] TPS from [%d] to [%d] OK\n" , p_pack->index , before , after);
             else
-                offset += sprintf(ret+offset , "alter packing process[%d] TPS from [%d] to [%d] OK\n" , p_pack->index , before , after);
+                offset += sprintf(ret+offset , "alter packing process[%d] TIME from [%d] to [%d] OK\n" , p_pack->index , before , after);
             p_pack = p_pack->next;
         }
     }
