@@ -83,7 +83,7 @@ int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
             offset +=  m->fields[32].intDataLength;
         }
         /* get trannum */
-        if ( trannum )  memcpy( trannum , m->header.pbytMsgtype , 4 );
+        if ( trannum )  memcpy( trannum , m->pbytMsgtype , 4 );
         /* get retcode */
         if ( retcode && m->bitmap.pbytFlags[38] == '1')  
             memcpy( retcode , m->fields[38].pchData , m->fields[38].intDataLength);

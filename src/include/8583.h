@@ -8,6 +8,7 @@
  DEFINES
  */
 #define CUPS_HEADER_LENGTH          46
+#define BANK_HEADER_LENGTH          41
 
 /*
  TYPES
@@ -38,7 +39,6 @@ struct cups_header{
     BYTE        pbytTransactionInfo[8+1];
     BYTE        pbytUserInfo[1+1];
     BYTE        pbytRejectCode[5+1];
-    BYTE        pbytMsgtype[4+1];
 };
 struct cups_bitmap{
     BYTE        bytIsExtend;
@@ -51,6 +51,7 @@ struct cups_field{
 };
 struct cups_message{
     CUPS_HEADER_t   header;
+    BYTE            pbytMsgtype[4+1];
     CUPS_BITMAP_t   bitmap;
     CUPS_FIELD_t    fields[128];
 };

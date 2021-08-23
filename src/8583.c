@@ -150,11 +150,15 @@ CUPS_MESSAGE_t *CUPS8583_parseMessage( BYTE *pchBuf , char *pchErrmsg )
     int ret = 0;
     /* parse header */
     ret = CUPS8583_parseHeader( pchBuf, &(pmessage->header) );
-    if ( ret != CUPS_HEADER_LENGTH + 4 ){
+    if ( ret != CUPS_HEADER_LENGTH && ret != BANK_HEADER_LENGTH ){
         if ( pchErrmsg )    sprintf( pchErrmsg , "parse header fail");
         goto parse_fail;
     }
     pchBuf += ret;
+
+    /* Message Type */
+    memcpy( pmessage->pbytMsgtype , pchBuf , 4 );
+    pchBuf += 4;
 
     /* parse bitmap */
     ret = CUPS8583_parseBitmap(pchBuf, &(pmessage->bitmap));
@@ -197,6 +201,10 @@ int CUPS8583_parseHeader( BYTE *pchBuf , CUPS_HEADER_t *pheader )
 {
     int     offset = 0;
 
+    if ( pheader->pbytHeaderLength[0] == BANK_HEADER_LENGTH ){
+        return BANK_HEADER_LENGTH;
+    }
+
     /* Header Legnth */
     memcpy( pheader->pbytHeaderLength , pchBuf+offset , 1);
     if ( pheader->pbytHeaderLength[0] != CUPS_HEADER_LENGTH )   return -1;
@@ -237,10 +245,6 @@ int CUPS8583_parseHeader( BYTE *pchBuf , CUPS_HEADER_t *pheader )
     /* Reject Code */
     memcpy( pheader->pbytRejectCode , pchBuf+offset , 5 );
     offset += 5;
-
-    /* Message Type */
-    memcpy( pheader->pbytMsgtype , pchBuf+offset , 4 );
-    offset += 4;
 
     return offset;
 }
@@ -330,7 +334,7 @@ void CUPS8583_printMessage( CUPS_MESSAGE_t *pmessage)
     CUPS8583_printHex( pmessage->header.pbytTransactionInfo,    "HEAD" , 8  , 8  , "TRASACTION INFORMATION"    );
     CUPS8583_printHex( pmessage->header.pbytUserInfo,           "HEAD" , 9  , 1  , "USER INFORMATION"          );
     CUPS8583_printHex( pmessage->header.pbytRejectCode,         "HEAD" , 10 , 5  , "REJECT CODE"               );
-    CUPS8583_printHex( pmessage->header.pbytMsgtype,            "TYPE" , 0  , 4  , "MSGTYPE"                   );
+    CUPS8583_printHex( pmessage->pbytMsgtype,                   "TYPE" , 0  , 4  , "MSGTYPE"                   );
     CUPS8583_printHex( pmessage->bitmap.bytRaw,"BITM" , 1 , pmessage->bitmap.bytIsExtend==1 ? 16 : 8 ,"BITMAP" );
     for( int i = 1 ; i < (pmessage->bitmap.bytIsExtend == 1 ? 128 : 64) ; i ++){
         if ( pmessage->bitmap.pbytFlags[i] == '1' ){

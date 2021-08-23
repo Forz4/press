@@ -135,7 +135,6 @@ int main(int argc , char *argv[])
         memset(inputLine , 0x00 , sizeof(inputLine));
         fgets( inputLine , sizeof(inputLine) , stdin);
         if ( inputLine[0] == '\n' ){
-            print_usage();
             continue;
         }
 
