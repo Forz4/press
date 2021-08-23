@@ -187,8 +187,8 @@ int main(int argc , char *argv[])
                             temp = localtime(&t);
                             printf("[%s]:[%04d-%02d-%02d %02d:%02d:%02d]\n" ,\
                                 reply->element[i]->str,\
-                                temp->tm_year ,\
-                                temp->tm_mon ,\
+                                temp->tm_year + 1900 ,\
+                                temp->tm_mon + 1,\
                                 temp->tm_mday ,\
                                 temp->tm_hour ,\
                                 temp->tm_min ,\

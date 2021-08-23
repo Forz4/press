@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <hiredis/hiredis.h>
 
 void print_help()
@@ -122,7 +123,7 @@ int main( int argc , char *argv[])
 
     fprintf( fp_res, "TIME,SENDTPS,RECVTPS");
     for( i = 0 ; i < numOfTran ; i ++){
-    	fprintf(fp_res , ",%s",trannum[i]);
+    	fprintf(fp_res , ",tran%s",trannum[i]);
     }
     fprintf(fp_res,"\n");
 

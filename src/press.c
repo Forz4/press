@@ -51,7 +51,7 @@ int getTranInfo( char *message  , char *key  , char *trannum , char *retcode )
         if (key){
             memcpy( key+offset , message+4 , 4);
             offset += 4;
-            memcpy( key+offset , message+14 , 6);
+            memcpy( key+offset , message+32 , 6);
             offset += 6;
         }
         /* get trannum */
@@ -1689,7 +1689,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                         freeReplyObject(reply1);
                     }
                     if ( recvnum > 0 ){
-                        offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%-7.2fms]\n" ,\
+                        offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%.2fms]\n" ,\
                                 trannum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
                     }
                     proc = proc->next;

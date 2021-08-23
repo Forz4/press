@@ -201,12 +201,11 @@ int CUPS8583_parseHeader( BYTE *pchBuf , CUPS_HEADER_t *pheader )
 {
     int     offset = 0;
 
+    /* Header Legnth */
+    memcpy( pheader->pbytHeaderLength , pchBuf+offset , 1);
     if ( pheader->pbytHeaderLength[0] == BANK_HEADER_LENGTH ){
         return BANK_HEADER_LENGTH;
     }
-
-    /* Header Legnth */
-    memcpy( pheader->pbytHeaderLength , pchBuf+offset , 1);
     if ( pheader->pbytHeaderLength[0] != CUPS_HEADER_LENGTH )   return -1;
     offset += 1;
 
