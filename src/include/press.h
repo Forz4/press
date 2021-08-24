@@ -28,6 +28,9 @@
 #define CONN_SENDERROR      9
 #define CONN_ACCEPTING      10
 
+#define MONITOR_TPS			1
+#define MONITOR_RESPONSE	2
+
 #define REPTYPE_RANDOM  1
 #define REPTYPE_FILE    2
 #define REPTYPE_F7      3

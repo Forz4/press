@@ -495,10 +495,11 @@ int conn_receiver_start(comm_proc_st *p_receiver)
     char            retcode[6+1];
     redisContext    *c = NULL;
 
-    if ( p_receiver->monitor == 1 ){
+    if ( p_receiver->monitor != 0 ){
         c = redisConnect("127.0.0.1", 6379);
         if(c->err) {
             log_write(SYSLOG, LOGERR, "redis server not found : %s\n", c->errstr);
+            conn_report_status( CONN_REDISERROR );
             close(server_sockfd);
             exit(1);
         }
@@ -573,47 +574,52 @@ int conn_receiver_start(comm_proc_st *p_receiver)
         /* debug */
         usleep(100);
 
-        if( p_receiver->monitor == 1 ){
+        if( p_receiver->monitor != 0 ){
             gettimeofday( &ts , NULL );
-            /* update tps */
-            reply = redisCommand(c, "incr recvtps|%d" , ts.tv_sec );
-            freeReplyObject(reply);
-            /* match up / average response time / successful rate */
-            memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
-            memset( trannum , 0x00 , sizeof(trannum) );
-            memset( retcode , 0x00 , sizeof(retcode) );
-    
-            if ( getTranInfo(buffer, redisMatchupKey, trannum, retcode) == 0 ){
-                reply = redisCommand(c, "hget %s tv_sec" , redisMatchupKey);
-                if ( reply->type == REDIS_REPLY_NIL ){
-                    freeReplyObject(reply);
-                    log_write(CONLOG, LOGERR, "[%s] matchup fail", redisMatchupKey);
-                } else {
-                    int second = atoi(reply->str);
-                    freeReplyObject(reply);
+            if ( p_receiver->monitor & MONITOR_TPS ){
+                /* update tps */
+                reply = redisCommand(c, "incr recvtps|%d" , ts.tv_sec );
+                freeReplyObject(reply);
+            }
 
-                    reply = redisCommand(c, "hget %s tv_usec" , redisMatchupKey);
-                    int usec = atoi(reply->str);
-                    freeReplyObject(reply);
-
-                    int duration = (ts.tv_sec - second)*1000000 + ts.tv_usec - usec;
-    
-                    reply = redisCommand( c , "del %s", redisMatchupKey);
-                    freeReplyObject(reply);
-
-                    reply = redisCommand( c , "incr trac|%s|total|%d", trannum , ts.tv_sec );
-                    freeReplyObject(reply);
-
-                    reply = redisCommand( c , "incrby trac|%s|duration|%d %d", trannum , ts.tv_sec , duration);
-                    freeReplyObject(reply);
-    
-                    if ( strlen(retcode) && atoi(retcode) == 0 ){
-                        reply = redisCommand( c , "incr trac|%s|suc|%d", trannum , ts.tv_sec);
+            if ( p_receiver->monitor & MONITOR_RESPONSE ){
+                /* match up / average response time / successful rate */
+                memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
+                memset( trannum , 0x00 , sizeof(trannum) );
+                memset( retcode , 0x00 , sizeof(retcode) );
+        
+                if ( getTranInfo(buffer, redisMatchupKey, trannum, retcode) == 0 ){
+                    reply = redisCommand(c, "hget %s tv_sec" , redisMatchupKey);
+                    if ( reply->type == REDIS_REPLY_NIL ){
                         freeReplyObject(reply);
+                        log_write(CONLOG, LOGERR, "[%s] matchup fail", redisMatchupKey);
+                    } else {
+                        int second = atoi(reply->str);
+                        freeReplyObject(reply);
+    
+                        reply = redisCommand(c, "hget %s tv_usec" , redisMatchupKey);
+                        int usec = atoi(reply->str);
+                        freeReplyObject(reply);
+    
+                        int duration = (ts.tv_sec - second)*1000000 + ts.tv_usec - usec;
+        
+                        reply = redisCommand( c , "del %s", redisMatchupKey);
+                        freeReplyObject(reply);
+    
+                        reply = redisCommand( c , "incr trac|%s|total|%d", trannum , ts.tv_sec );
+                        freeReplyObject(reply);
+    
+                        reply = redisCommand( c , "incrby trac|%s|duration|%d %d", trannum , ts.tv_sec , duration);
+                        freeReplyObject(reply);
+        
+                        if ( strlen(retcode) && atoi(retcode) == 0 ){
+                            reply = redisCommand( c , "incr trac|%s|suc|%d", trannum , ts.tv_sec);
+                            freeReplyObject(reply);
+                        }
                     }
+                } else {
+                    log_write(CONLOG, LOGERR , "unpack error");
                 }
-            } else {
-                log_write(CONLOG, LOGERR , "unpack error");
             }
         }
 
@@ -682,7 +688,7 @@ int conn_sender_start(comm_proc_st *p_sender)
     char            redisMatchupKey[100];
     redisContext    *c = NULL;
 
-    if ( p_sender->monitor == 1 ){
+    if ( p_sender->monitor != 0 ){
         c = redisConnect("127.0.0.1", 6379);
         if(c->err){
             log_write(SYSLOG, LOGERR, "connection error:%s\n", c->errstr);
@@ -759,19 +765,23 @@ int conn_sender_start(comm_proc_st *p_sender)
         }
         log_write(CONLOG , LOGDBG , "send OK , len[%d]" , len);
 
-        if ( p_sender->monitor == 1 ){
+        if ( p_sender->monitor != 0 ){
             gettimeofday(&ts , NULL);
             /* insert match up info */
-            if ( p_sender->type != 'X' ){
-                memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
-                if ( getTranInfo(msgs.text, redisMatchupKey, NULL ,  NULL) == 0 ){
-                    reply = redisCommand(c, "hmset %s tv_sec %d tv_usec %d " , redisMatchupKey , ts.tv_sec  , ts.tv_usec);
-                    freeReplyObject(reply);
-                }
-            }  
+            if ( p_sender->monitor & MONITOR_RESPONSE ){            
+                if ( p_sender->type != 'X' ){
+                    memset( redisMatchupKey , 0x00 , sizeof(redisMatchupKey) );
+                    if ( getTranInfo(msgs.text, redisMatchupKey, NULL ,  NULL) == 0 ){
+                        reply = redisCommand(c, "hmset %s tv_sec %d tv_usec %d " , redisMatchupKey , ts.tv_sec  , ts.tv_usec);
+                        freeReplyObject(reply);
+                    }
+                }  
+            }
             /* update sendtps */
-            reply = redisCommand(c, "incr sendtps|%d" , ts.tv_sec );
-            freeReplyObject(reply);
+            if ( p_sender->monitor & MONITOR_TPS ){
+                reply = redisCommand(c, "incr sendtps|%d" , ts.tv_sec );
+                freeReplyObject(reply);
+            }
         }
 
         if ( p_sender->persist == 1 ){
