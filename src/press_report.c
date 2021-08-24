@@ -6,7 +6,7 @@
 
 void print_help()
 {
-	printf("press_report snapname_start snapname_end trannum,...\n");
+	printf("press_report snapname_start snapname_end tran1,tran2,tran3,... \n");
 	return;
 }
 

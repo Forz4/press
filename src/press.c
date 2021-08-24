@@ -1641,7 +1641,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                 time_t t = 0;
                 struct tm *temp = NULL;
                 char trannum[4+1];
-                int  recvnum = 0;
+                double  recvnum = 0.0;
                 int  sucnum = 0;
                 int  duration = 0;
                 int  i = 0;
