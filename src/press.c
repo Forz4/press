@@ -1537,11 +1537,12 @@ int command_pack_shut(pack_config_st *p_pack_conf)
 
 char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *p_pack_conf)
 {
-    char *ret = (char *)malloc(MAX_REPLY_LEN);
-    int offset = 0;
-    char status[20];
-    char type[20];
+    char    *ret = (char *)malloc(MAX_REPLY_LEN);
+    int     offset = 0;
+    char    status[20];
+    char    type[20];
     struct  timeval nowTimeStamp;
+    int     totalTPS = 0;
     /*struct  timeval timeInterval;*/
     memset(ret , 0x00 , MAX_REPLY_LEN);
     comm_proc_st *p_comm = p_conn_conf->process_head;
@@ -1552,7 +1553,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
             offset += sprintf(ret+offset , \
                     "CONNECTION MONITOR\n");
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "======================================================================================\n");
             offset += sprintf(ret+offset , \
                     "[TYPE][IP             ][PORT  ][PID     ][STATUS         ]\n");
             while ( p_comm != NULL ){
@@ -1582,10 +1583,6 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                                 status);
                 p_comm = p_comm->next;
             }
-            /*
-            offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
-            */
         } else {
             offset += sprintf(ret+offset , "NO CONNECTION PROCESS,ENTER init TO START CONNECTION MODULE\n");
         }
@@ -1595,9 +1592,17 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
             offset += sprintf(ret+offset , \
                     "\nPACKING MONITOR\n");
             offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "======================================================================================\n");
             offset += sprintf(ret+offset , \
-                    "[INDEX][TPLFILE    ][STATUS     ][SET TPS ][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
+                    "[INDEX][TPLFILE    ][STATUS     ][SET TPS ][PERCENT][PACKAGE SENT][SENTTIME/TOTALTIME]\n");
+            /* get total tps */
+            p_pack = p_pack_conf->pit_head;
+            while ( p_pack != NULL ) {
+                l_stat = g_stat + p_pack->index;
+                totalTPS += l_stat->tps;
+                p_pack = p_pack->next;
+            }
+            p_pack = p_pack_conf->pit_head;
             while ( p_pack != NULL ) {
                 l_stat = g_stat + p_pack->index;
                 memset( status , 0x00 , sizeof(status));
@@ -1610,21 +1615,19 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                         strcpy(status , "ALL SENT   ");
                     }
                     offset += sprintf(ret+offset , \
-                                    "[%-5d][%-11s][%-11s][%-8d][%-12d][%-8d/%-9d]\n" , \
+                                    "[%-5d][%-11s][%-11s][%-8d][%-6.2f%%][%-12d][%-8d/%-9d]\n" , \
                                     p_pack->index,\
                                     p_pack->tplFileName,\
                                     status,\
                                     l_stat->tps,\
+                                    (float)l_stat->tps*100/totalTPS,\
                                     l_stat->send_num,\
                                     l_stat->timelast,\
                                     l_stat->timetotal);
                 }
                 p_pack = p_pack->next;
             }
-            /*
-            offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
-            */
+            offset += sprintf(ret+offset , "TOTAL TPS : %d\n" , totalTPS);
         } else {
             offset += sprintf(ret+offset , "NO PACKING PROCESS, ENTER load TO LOAD CONFIGS\n");
         }
@@ -1643,7 +1646,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                 offset += sprintf(ret+offset , \
                     "\nTPS-MONITOR\n");
                 offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "======================================================================================\n");
                 redisReply *reply = NULL;
                 redisReply *reply1 = NULL;
                 int sendtps = 0;
@@ -1677,7 +1680,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                 offset += sprintf(ret+offset , \
                     "\nTRANSACTION-MONITOR\n");
                 offset += sprintf(ret+offset , \
-                    "===========================================================================\n");
+                    "======================================================================================\n");
                 offset += sprintf(ret+offset , "[TRAN][RATIO  ][RESPONSE ]\n");
 
 
@@ -1699,7 +1702,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
                         freeReplyObject(reply1);
                     }
                     if ( recvnum > 0 ){
-                        offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%.2fms]\n" ,\
+                        offset += sprintf(ret+offset , "[%4s][%-3.2f%%][%7.2fms]\n" ,\
                                 trannum , (double)sucnum*100/recvnum , (double)duration/recvnum/1000);
                     }
                     proc = proc->next;
@@ -1707,7 +1710,7 @@ char *command_get_stat(int flag , conn_config_st *p_conn_conf , pack_config_st *
             }
             redisFree(c);
         } else {
-            offset += sprintf(ret+offset , "NO REAL TIME MONITOR");
+            offset += sprintf(ret+offset , "\nNO REAL TIME MONITOR");
         }
     }
     return ret;

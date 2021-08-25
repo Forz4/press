@@ -94,7 +94,7 @@ int main(int argc , char *argv[])
     char ip[MAX_NODE_NUM][20];
     struct sockaddr_in servaddr[MAX_NODE_NUM];
     memset( ip , 0x00 , sizeof(ip) );
-    memset( port , 0x00 , sizeof(port) );
+    memset( port , 0x00 , sizeof(port) ); 
     memset( servaddr , 0 , sizeof(servaddr));
     int  nodeIndex = 0; 
 
